@@ -47,3 +47,10 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+
+# Mac OS files
+*.DS_Store
+
+# Datasets and output
+data/
+output/
