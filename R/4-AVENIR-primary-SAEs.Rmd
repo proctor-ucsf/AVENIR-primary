@@ -1,0 +1,51 @@
+---
+title: "AVENIR Mortality Serious Adverse Events"
+author: "Brittany Peterson"
+date: "`r Sys.time()`"
+output: 
+  html_document:
+    highlight: haddock
+    theme: default
+    code_folding: hide
+    df_print: paged
+    toc: yes
+    toc_depth: '3'
+    toc_float:
+      collapsed: yes
+      smooth_scroll: yes
+---
+
+```{r setup, message = F, warning=F}
+rm(list=ls())
+
+library(here)
+
+# source configuration file
+source(here("R", "0-AVENIR-primary-Config.R"))
+
+# SAE
+sae <- read_rds(here("data", "AVENIR_sae_public.rds"))
+```    
+
+# Serious Adverse Events Table
+```{r SAE table}
+
+sae.tbl <- sae %>%
+    mutate(tx = str_replace(tx, "3 - ", ""),
+           tx = str_replace(tx, "1 - ", ""),
+           tx = str_replace(tx, "2 - ", "")) %>%
+  mutate(treatment_year_wk = paste0(treatment_date_year,"-",treatment_date_week)) %>%
+  select(tx, treatment_year_wk, days_between_treatment, age_occurred, description)
+
+kable(sae.tbl, "html", col.names = c("Treatment Arm", "Treatment Year-Week", "Days between Treatment and SAE", "Age in Months when SAE occurred", "Description"),
+        booktabs=T) %>%
+  row_spec(0,bold=TRUE) %>%
+    kable_styling()
+
+```      
+
+
+# Session Info
+```{r session info}
+sessionInfo()
+```

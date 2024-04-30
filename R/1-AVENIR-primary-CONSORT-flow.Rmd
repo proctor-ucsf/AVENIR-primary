@@ -1,0 +1,566 @@
+---
+title: "AVENIR Mortality CONSORT Flow"
+author: "Brittany Peterson"
+date: "`r Sys.time()`"
+output: 
+  html_document:
+    highlight: haddock
+    theme: default
+    code_folding: hide
+    df_print: paged
+    toc: yes
+    toc_depth: '3'
+    toc_float:
+      collapsed: yes
+      smooth_scroll: yes
+---
+
+# Overview
+
+NOTE FOR PUBLIC REPLICATION
+THIS SCRIPT WILL NOT RUN ON PUBLIC DATA
+
+IT RELIES ON IDIOSYNCRATIC DATASETS TO IDENTIFY 91 GRAPPES THAT WERE RANDOMIZED BUT
+NOT ACTUALLY MEASURED.  AFTER INTERNAL REVIEW, WE DECIDED TO
+LEAVE AS-IS BECAUSE IT WOULD REQUIRE QUITE A BIT OF WORK TO WEAVE INTO THE PUBLIC
+WORKFLOW AN APPROPRIATE DATASET TO IDENTIFY THESE GRAPPES
+SEE THE NOTE IN FIGURE S1 CONSORT FLOW DIAGRAM TO EXPLAIN THIS
+THIS IS WHY THERE ARE 2,909 GRAPPES WITH PERSON-TIME IN THE CHILD-PHASE LEVEL DATA
+
+We have provided the original code and output for documentation
+
+```{r setup, message = F, warning=F}
+rm(list=ls())
+
+library(here)
+
+# source configuration file
+source(here("R", "0-AVENIR-primary-Config.R"))
+
+# load in PT by Grappe data
+# rename public IDs to use code not run on public datasets
+pt_by_grappe <- read_rds(here("data", "AVENIR_grappe_phase_public.rds")) %>%
+  rename(siteid = siteid_public)
+
+# load in PT by child for overall children
+# rename public IDs to use code not run on public datasets
+pt_by_child <- read_rds(here("data", "AVENIR_child_phase_public.rds")) %>%
+  rename(siteid = siteid_public, hhid = hhid_public, childid = childid_public)
+
+```     
+
+```{r total randomized}
+
+#-------------------------------------------
+# load in randomization file
+rando.groups <- read_csv(paste0(randomization_data, "/UNMASKED_AVENIR_grappe_enrollment_date_arm.csv"))
+
+#-------------------------------------------
+# load in unmasked treatment arms and merge to randomized files
+tx_letter <- read_csv(paste0(randomization_data, "/avenir-treatment-assignments.csv")) %>%
+    rename(tx = arm,
+           treatment_letter = letter)
+
+dosso_tx <- read_excel(paste0(randomization_data, "/AVENIR_Dosso_TxLetters_2023_03_08.xlsx"))
+tahoua1_tx <- read_excel(paste0(randomization_data, "/AVENIR_Tahoua_TxLetters_0224_locked.xlsx"))
+tahoua2_tx <- read_excel(paste0(randomization_data, "/AVENIR-Randomization-Tahoua-Part2-Mortality-2022-10-20_locked.xlsx"))
+
+#-------------------------------------------
+# clean randomization data
+dosso_tx <- dosso_tx %>%
+  rename(siteid = site_code) %>%
+  filter(!is.na(treatment_letter_1_11)) %>%
+  mutate(region = case_when(mortality_round4 == 1 ~ "Dosso Part2",
+                            mortality == 1 ~ "Dosso Part1",
+                            TRUE ~ "")) %>%
+  select(region, siteid, treatment_letter_1_11)
+
+
+tahoua1_tx <- tahoua1_tx %>%
+  rename(siteid = site_code) %>%
+  filter(mortality==1) %>%
+  mutate(region = "Tahoua Part1") %>%
+  select(region, siteid, treatment_letter_1_11)
+
+tahoua2_tx <- tahoua2_tx %>%
+  rename(siteid = site_code) %>%
+  mutate(region = "Tahoua Part2") %>%
+  select(region, siteid, treatment_letter_1_11)
+tx <- bind_rows(dosso_tx, tahoua1_tx, tahoua2_tx)
+
+#-------------------------------------------
+#### get list of all grappes with random allocation and tx
+tx_allocation_all <- tx %>%
+    left_join(tx_letter, by = c("treatment_letter_1_11" = "treatment_letter")) %>%
+    filter(region != "") %>%
+    mutate(adaptive_rand = case_when(region == "Dosso Part1" ~ "Random Allocation 1",
+                                     region == "Tahoua Part1" ~ "Random Allocation 2",
+                                     region %in% c("Dosso Part2", "Tahoua Part2") ~ "Random Allocation 3")) %>%
+    mutate(adaptive_rand = ifelse(siteid == "1-04-43-085", "Random Allocation 1", adaptive_rand))
+
+total <- tx_allocation_all %>%
+    group_by(adaptive_rand,tx) %>%
+    summarise(rand = n())
+
+#-------------------------------------------
+# total siteids
+total.site <- pt_by_child %>% distinct(siteid) %>% nrow()
+total.child<- pt_by_child %>% distinct(childid) %>% nrow()
+total.years <- sum(pt_by_grappe$pt_year_1to59)
+total.deaths <- sum(pt_by_grappe$n_deaths_1to59)
+
+#-------------------------------------------
+# get # excluded
+dosso_tx2 <- read_excel(paste0(randomization_data, "/AVENIR_Dosso_TxLetters_2023_03_08.xlsx")) %>%
+    filter(mortality == 1 |mortality_round4 == 1)
+tahouatx2 <- read_excel(paste0(randomization_data, "/AVENIR_Tahoua_TxLetters_02_01.xlsx")) %>%
+    mutate(Menage = as.numeric(Menage),
+           lat = as.numeric(lat),
+           long = as.numeric(long),
+           kmToTown = as.numeric(kmToTown)) %>%
+    filter(mortality ==1 )
+tx2 <- bind_rows(dosso_tx2, tahouatx2) %>%
+  rename(siteid = site_code)
+
+d.uncensused <- read_excel(paste0(final_data, "/final/AVENIR Refusals, Inexistent, and Low Coverage.xlsx"), sheet = 3) %>%
+  rename(siteid = site_code)
+
+not_in_pt <- tx2 %>%
+    filter(!siteid %in% pt_by_child$siteid)
+
+no.exist <- not_in_pt %>%
+    filter(nonexistent == 1)
+
+not_in_pt <- not_in_pt %>%
+    left_join(d.uncensused, by = "siteid") %>%
+    filter(is.na(nonexistent))
+
+refus <- not_in_pt %>%
+    filter(!siteid %in% no.exist$siteid) %>%
+    filter(str_detect(Observation, "refus")) %>%
+    distinct(siteid)
+
+red_zone <- not_in_pt %>%
+    filter(!siteid %in% no.exist$siteid) %>%
+    filter(!siteid %in% refus$siteid) %>%
+    filter(str_detect(Observation, "rouge")) %>%
+    distinct(siteid)
+
+other <- not_in_pt %>%
+    filter(!str_detect(Observation, "rouge")) %>%
+    filter(!str_detect(Observation, "refus"))
+
+reasons <- tx2 %>%
+    filter(!siteid %in% pt_by_child$siteid) %>%
+    mutate(reason = case_when(siteid %in% no.exist$siteid ~ "Does not Exist",
+                              siteid %in% refus$siteid ~ "Refus",
+                              siteid %in% red_zone$siteid ~ "Red zone",
+                              siteid %in% other$siteid ~ "other")) %>%
+    group_by(reason) %>%
+    summarise(n = n())
+# BP note: 2-12-03-009 only had one household entered and did not contribute person time
+# other 2 NA are protocol deviations
+
+```    
+
+# Last Census Date: July 31, 2023
+
+# Grappe Randomization by Arm
+```{r grappe rando by arm}
+
+# table with 3 columns for arm, and one row for randomized, one row for analyzed
+randomized <- tx_allocation_all %>%
+    group_by(tx) %>%
+    summarise(grappe = n()) %>%
+    mutate(type = "Randomized") %>%
+    spread(tx,grappe)
+
+analyzed <- pt_by_grappe %>%
+    filter(pt_year_1to59 > 0) %>%
+    group_by(tx) %>%
+    summarise(grappe = n_distinct(siteid)) %>%
+    mutate(type = "Analyzed") %>%
+    spread(tx,grappe)
+
+grappe.totals <- bind_rows(randomized, analyzed)
+
+kable(grappe.totals %>% rename(" " = type), "html",
+        booktabs=T, format.args = list(big.mark = ",")) %>%
+  row_spec(0,bold=TRUE) %>%
+  kable_styling()
+
+```    
+
+# Grappes Randomized and Analyzed
+```{r grappe rando by arm 2}
+
+# table with 3 columns for arm, and one row for randomized, one row for analyzed
+randomized <- tx_allocation_all %>%
+    group_by(adaptive_rand) %>%
+    summarise(grappe = n()) %>%
+    mutate(type = "Randomized") %>%
+    spread(adaptive_rand,grappe)
+
+analyzed <- pt_by_grappe %>%
+    filter(pt_year_1to59 > 0) %>%
+    group_by(adaptive_rand) %>%
+    summarise(grappe = n_distinct(siteid)) %>%
+    mutate(type = "Analyzed") %>%
+    spread(adaptive_rand,grappe)
+
+grappe.totals <- bind_rows(randomized, analyzed)
+
+kable(grappe.totals %>% rename(" " = type), "html",
+        booktabs=T, format.args = list(big.mark = ",")) %>%
+  row_spec(0,bold=TRUE) %>%
+  kable_styling()
+
+```    
+
+# By Randomization Group
+
+## Only children and grappes that contribute to person time for each individual phase are counted
+
+```{r, message = F, warning=F}
+
+# Random Allocation 1
+total_child_a1 <- pt_by_child %>%
+    filter(adaptive_rand == "Random Allocation 1") %>%
+    distinct(childid) %>%
+    nrow()
+
+group1_flow <- pt_by_grappe %>%
+    filter(adaptive_rand == "Random Allocation 1") %>%
+    group_by(phase) %>%
+    summarise(`Number of Grappes` = n_distinct(siteid[pt_year_1to59>0]),
+              `Number of Children` = sum(started_phase_1to59) - sum(lost_1to59),
+              `Person Years 1-59 months` = sum(pt_year_1to59),
+              `Person Years 1-11 months` = sum(pt_year_1to11),
+              `Person Years 12-59 months` = sum(pt_year_12to59)) %>%
+    pivot_longer(2:6, names_to = "Names", values_to = "Values") %>%
+    mutate(Values = round(Values,1))%>%
+    bind_rows(., pt_by_grappe %>%
+                  filter(adaptive_rand == "Random Allocation 1") %>%
+                  summarise(`Number of Grappes` = n_distinct(siteid[pt_year_1to59>0]),
+              `Number of Children` = total_child_a1,
+              `Person Years 1-59 months` = sum(pt_year_1to59),
+              `Person Years 1-11 months` = sum(pt_year_1to11),
+              `Person Years 12-59 months` = sum(pt_year_12to59)) %>%
+                  mutate(phase = "0-24") %>%
+                  pivot_longer(1:5, names_to = "Names", values_to = "Values") %>%
+                  mutate(Values = round(Values,1)))
+
+# Random Allocation 2
+total_child_a2 <- pt_by_child %>%
+    filter(adaptive_rand == "Random Allocation 2") %>%
+    distinct(childid) %>%
+    nrow()
+
+group2_flow <- pt_by_grappe %>%
+    filter(adaptive_rand == "Random Allocation 2") %>%
+    group_by(phase) %>%
+    summarise(`Number of Grappes` = n_distinct(siteid[pt_year_1to59>0]),
+              `Number of Children` = sum(started_phase_1to59) - sum(lost_1to59),
+              `Person Years 1-59 months` = sum(pt_year_1to59),
+              `Person Years 1-11 months` = sum(pt_year_1to11),
+              `Person Years 12-59 months` = sum(pt_year_12to59)) %>%
+    pivot_longer(2:6, names_to = "Names", values_to = "Values") %>%
+    mutate(Values = round(Values,1)) %>%
+    bind_rows(., pt_by_grappe %>%
+                  filter(adaptive_rand == "Random Allocation 2") %>%
+                  summarise(`Number of Grappes` = n_distinct(siteid[pt_year_1to59>0]),
+              `Number of Children` = total_child_a2,
+              `Person Years 1-59 months` = sum(pt_year_1to59),
+              `Person Years 1-11 months` = sum(pt_year_1to11),
+              `Person Years 12-59 months` = sum(pt_year_12to59)) %>%
+                  mutate(phase = "0-24") %>%
+                  pivot_longer(1:5, names_to = "Names", values_to = "Values") %>%
+                  mutate(Values = round(Values,1))) %>%
+    bind_rows(data.frame(phase = "6-12", `Number of Grappes` = 0, `Number of Children` = 0, `Person Years 1-59 months` = 0,
+                         `Person Years 1-11 months` = 0, `Person Years 12-59 months` = 0, check.names = F) %>%
+                  pivot_longer(2:6, names_to = "Names", values_to = "Values"), .) %>%
+    bind_rows(data.frame(phase = "0-6", `Number of Grappes` = 0, `Number of Children` = 0, `Person Years 1-59 months` = 0,
+                         `Person Years 1-11 months` = 0, `Person Years 12-59 months` = 0, check.names = F) %>%
+                  pivot_longer(2:6, names_to = "Names", values_to = "Values"), .)
+
+# Random Allocation 3
+
+total_child_a3 <- pt_by_child %>%
+    filter(adaptive_rand == "Random Allocation 3") %>%
+    distinct(childid) %>%
+    nrow()
+
+group3_flow <- pt_by_grappe %>%
+    filter(adaptive_rand == "Random Allocation 3") %>%
+    group_by(phase) %>%
+    summarise(`Number of Grappes` = n_distinct(siteid[pt_year_1to59>0]),
+              `Number of Children` = sum(started_phase_1to59) - sum(lost_1to59),
+              `Person Years 1-59 months` = sum(pt_year_1to59),
+              `Person Years 1-11 months` = sum(pt_year_1to11),
+              `Person Years 12-59 months` = sum(pt_year_12to59)) %>%
+    pivot_longer(2:6, names_to = "Names", values_to = "Values") %>%
+    mutate(Values = round(Values,1)) %>%
+    bind_rows(., pt_by_grappe %>%
+                  filter(adaptive_rand == "Random Allocation 3") %>%
+                  summarise(`Number of Grappes` = n_distinct(siteid[pt_year_1to59>0]),
+              `Number of Children` = total_child_a3,
+              `Person Years 1-59 months` = sum(pt_year_1to59),
+              `Person Years 1-11 months` = sum(pt_year_1to11),
+              `Person Years 12-59 months` = sum(pt_year_12to59)) %>%
+                  mutate(phase = "0-24") %>%
+                  pivot_longer(1:5, names_to = "Names", values_to = "Values") %>%
+                  mutate(Values = round(Values,1)))  %>%
+    bind_rows(data.frame(phase = "12-18", `Number of Grappes` = 0, `Number of Children` = 0, `Person Years 1-59 months` = 0,
+                         `Person Years 1-11 months` = 0, `Person Years 12-59 months` = 0, check.names = F) %>%
+                  pivot_longer(2:6, names_to = "Names", values_to = "Values"), .) %>%
+    bind_rows(data.frame(phase = "6-12", `Number of Grappes` = 0, `Number of Children` = 0, `Person Years 1-59 months` = 0,
+                         `Person Years 1-11 months` = 0, `Person Years 12-59 months` = 0, check.names = F) %>%
+                  pivot_longer(2:6, names_to = "Names", values_to = "Values"), .) %>%
+    bind_rows(data.frame(phase = "0-6", `Number of Grappes` = 0, `Number of Children` = 0, `Person Years 1-59 months` = 0,
+                         `Person Years 1-11 months` = 0, `Person Years 12-59 months` = 0, check.names = F) %>%
+                  pivot_longer(2:6, names_to = "Names", values_to = "Values"), .)
+
+# Overall
+
+total_child_overall <- pt_by_child %>%
+    distinct(childid) %>%
+    nrow()
+
+overall_flow <- pt_by_grappe %>%
+    group_by(phase) %>%
+    summarise(`Number of Grappes` = n_distinct(siteid[pt_year_1to59>0]),
+              `Number of Children` = sum(started_phase_1to59) - sum(lost_1to59),
+              `Person Years 1-59 months` = sum(pt_year_1to59),
+              `Person Years 1-11 months` = sum(pt_year_1to11),
+              `Person Years 12-59 months` = sum(pt_year_12to59)) %>%
+    pivot_longer(2:6, names_to = "Names", values_to = "Values") %>%
+    mutate(Values = round(Values,1)) %>%
+    bind_rows(., pt_by_grappe %>%
+                  summarise(`Number of Grappes` = n_distinct(siteid[pt_year_1to59>0]),
+              `Number of Children` = total_child_overall,
+              `Person Years 1-59 months` = sum(pt_year_1to59),
+              `Person Years 1-11 months` = sum(pt_year_1to11),
+              `Person Years 12-59 months` = sum(pt_year_12to59)) %>%
+                  mutate(phase = "0-24") %>%
+                  pivot_longer(1:5, names_to = "Names", values_to = "Values") %>%
+                  mutate(Values = round(Values,1)))
+
+
+```     
+
+## Random Allocation 1
+```{r rando random allocation 1}
+
+kable(group1_flow %>% select(-phase), "html", col.names = c("", ""),
+        booktabs=T, format.args = list(big.mark = ",")) %>%
+  row_spec(0,bold=TRUE) %>%
+  kableExtra::group_rows("Phase 0-6", 1, 5, label_row_css="l") %>% 
+  kableExtra::group_rows("Phase 6-12", 6, 10, label_row_css="l") %>% 
+  kableExtra::group_rows("Phase 12-18", 11, 15, label_row_css="l") %>%
+  kableExtra::group_rows("Phase 18-24", 16, 20, label_row_css="l") %>%
+  kableExtra::group_rows("Phase 0-24", 21, 25, label_row_css="l") %>%
+  kable_styling()
+
+
+```     
+
+## Random Allocation 2
+```{r rando allocation 2}
+
+kable(group2_flow %>% select(-phase), "html", col.names = c("", ""),
+        booktabs=T, format.args = list(big.mark = ",")) %>%
+  row_spec(0,bold=TRUE) %>%
+  kableExtra::group_rows("Phase 0-6", 1, 5, label_row_css="l") %>% 
+  kableExtra::group_rows("Phase 6-12", 6, 10, label_row_css="l") %>% 
+  kableExtra::group_rows("Phase 12-18", 11, 15, label_row_css="l") %>%
+  kableExtra::group_rows("Phase 18-24", 16, 20, label_row_css="l") %>%
+  kableExtra::group_rows("Phase 0-24", 21, 25, label_row_css="l") %>%
+  kable_styling()
+
+
+```     
+
+## Random Allocation 3
+```{r rando Random Allocation 3}
+
+kable(group3_flow %>% select(-phase), "html", col.names = c("", ""),
+        booktabs=T, format.args = list(big.mark = ",")) %>%
+  row_spec(0,bold=TRUE) %>%
+  kableExtra::group_rows("Phase 0-6", 1, 5, label_row_css="l") %>% 
+  kableExtra::group_rows("Phase 6-12", 6, 10, label_row_css="l") %>% 
+  kableExtra::group_rows("Phase 12-18", 11, 15, label_row_css="l") %>%
+  kableExtra::group_rows("Phase 18-24", 16, 20, label_row_css="l") %>%
+  kableExtra::group_rows("Phase 0-24", 21, 25, label_row_css="l") %>%
+  kable_styling()
+
+
+```     
+
+## Overall Randomization Groups
+```{r rando overall}
+
+kable(overall_flow %>% select(-phase), "html", col.names = c("", ""),
+        booktabs=T, format.args = list(big.mark = ",")) %>%
+  row_spec(0,bold=TRUE) %>%
+  kableExtra::group_rows("Phase 0-6", 1, 5, label_row_css="l") %>% 
+  kableExtra::group_rows("Phase 6-12", 6, 10, label_row_css="l") %>% 
+  kableExtra::group_rows("Phase 12-18", 11, 15, label_row_css="l") %>%
+  kableExtra::group_rows("Phase 18-24", 16, 20, label_row_css="l") %>%
+  kableExtra::group_rows("Phase 0-24", 21, 25, label_row_css="l") %>%
+  kable_styling()
+
+
+```     
+
+# By Randomization Group x Treatment Arm x Phase
+```{r rand x treatment arm}
+# 
+# Random Allocation 1
+total_child_a1 <- pt_by_child %>%
+    filter(adaptive_rand == "Random Allocation 1") %>%
+    distinct(childid) %>%
+    nrow()
+
+flow.arm.1 <- pt_by_grappe %>%
+    filter(adaptive_rand == "Random Allocation 1") %>%
+    mutate(tx = case_when(
+        tx == "3 - Placebo 1-59m" ~ "Placebo",
+        tx == "2 - Azithro 1-11m" ~ "Azithro 1-11m",
+        tx == "1 - Azithro 1-59m" ~ "Azithro 1-59m")) %>%
+    group_by(phase,tx) %>%
+    summarise(`Number of Grappes` = n_distinct(siteid[pt_year_1to59>0]),
+              `Number of Children` = sum(started_phase_1to59) - sum(lost_1to59),
+              `Person Years 1-59 months` = sum(pt_year_1to59),
+              `Person Years 1-11 months` = sum(pt_year_1to11),
+              `Person Years 12-59 months` = sum(pt_year_12to59)) %>%
+    pivot_longer(3:7, names_to = "Names.1", values_to = "Values.1") %>%
+        left_join(pt_by_grappe %>%
+    filter(adaptive_rand == "Random Allocation 2") %>%
+    mutate(tx = case_when(
+        tx == "3 - Placebo 1-59m" ~ "Placebo",
+        tx == "2 - Azithro 1-11m" ~ "Azithro 1-11m",
+        tx == "1 - Azithro 1-59m" ~ "Azithro 1-59m")) %>%
+    group_by(phase,tx) %>%
+    summarise(`Number of Grappes` = n_distinct(siteid[pt_year_1to59>0]),
+              `Number of Children` = sum(started_phase_1to59) - sum(lost_1to59),
+              `Person Years 1-59 months` = sum(pt_year_1to59),
+              `Person Years 1-11 months` = sum(pt_year_1to11),
+              `Person Years 12-59 months` = sum(pt_year_12to59)) %>%
+    pivot_longer(3:7, names_to = "Names.2", values_to = "Values.2"),
+    by = c("phase", "tx", "Names.1" = "Names.2")) %>%
+        left_join(pt_by_grappe %>%
+    filter(adaptive_rand == "Random Allocation 3") %>%
+    mutate(tx = case_when(
+        tx == "3 - Placebo 1-59m" ~ "Placebo",
+        tx == "2 - Azithro 1-11m" ~ "Azithro 1-11m",
+        tx == "1 - Azithro 1-59m" ~ "Azithro 1-59m")) %>%
+    group_by(phase,tx) %>%
+    summarise(`Number of Grappes` = n_distinct(siteid[pt_year_1to59>0]),
+              `Number of Children` = sum(started_phase_1to59) - sum(lost_1to59),
+              `Person Years 1-59 months` = sum(pt_year_1to59),
+              `Person Years 1-11 months` = sum(pt_year_1to11),
+              `Person Years 12-59 months` = sum(pt_year_12to59)) %>%
+    pivot_longer(3:7, names_to = "Names.3", values_to = "Values.3"),
+    by = c("phase", "tx", "Names.1" = "Names.3")) %>%
+    mutate(Values.1 = round(Values.1,1),
+           Values.2 = round(Values.2,1),
+           Values.3 = round(Values.3,1)) %>%
+    replace_na(list(Values.2 = 0, Values.3 = 0))%>%
+    ungroup()
+
+overall.flow.arm <- pt_by_grappe %>%
+    filter(adaptive_rand == "Random Allocation 1") %>%
+    mutate(tx = case_when(
+        tx == "3 - Placebo 1-59m" ~ "Placebo",
+        tx == "2 - Azithro 1-11m" ~ "Azithro 1-11m",
+        tx == "1 - Azithro 1-59m" ~ "Azithro 1-59m")) %>%
+    group_by(tx) %>%
+    summarise(`Number of Grappes` = n_distinct(siteid[pt_year_1to59>0]),
+              `Number of Children` = sum(started_phase_1to59) - sum(lost_1to59),
+              `Person Years 1-59 months` = sum(pt_year_1to59),
+              `Person Years 1-11 months` = sum(pt_year_1to11),
+              `Person Years 12-59 months` = sum(pt_year_12to59)) %>%
+    pivot_longer(2:6, names_to = "Names.1", values_to = "Values.1") %>%
+        left_join(pt_by_grappe %>%
+    filter(adaptive_rand == "Random Allocation 2") %>%
+    mutate(tx = case_when(
+        tx == "3 - Placebo 1-59m" ~ "Placebo",
+        tx == "2 - Azithro 1-11m" ~ "Azithro 1-11m",
+        tx == "1 - Azithro 1-59m" ~ "Azithro 1-59m")) %>%
+    group_by(tx) %>%
+    summarise(`Number of Grappes` = n_distinct(siteid[pt_year_1to59>0]),
+              `Number of Children` = sum(started_phase_1to59) - sum(lost_1to59),
+              `Person Years 1-59 months` = sum(pt_year_1to59),
+              `Person Years 1-11 months` = sum(pt_year_1to11),
+              `Person Years 12-59 months` = sum(pt_year_12to59)) %>%
+    pivot_longer(2:6, names_to = "Names.2", values_to = "Values.2"),
+    by = c("tx", "Names.1" = "Names.2")) %>%
+        left_join(pt_by_grappe %>%
+    filter(adaptive_rand == "Random Allocation 3") %>%
+    mutate(tx = case_when(
+        tx == "3 - Placebo 1-59m" ~ "Placebo",
+        tx == "2 - Azithro 1-11m" ~ "Azithro 1-11m",
+        tx == "1 - Azithro 1-59m" ~ "Azithro 1-59m")) %>%
+    group_by(tx) %>%
+    summarise(`Number of Grappes` = n_distinct(siteid[pt_year_1to59>0]),
+              `Number of Children` = sum(started_phase_1to59) - sum(lost_1to59),
+              `Person Years 1-59 months` = sum(pt_year_1to59),
+              `Person Years 1-11 months` = sum(pt_year_1to11),
+              `Person Years 12-59 months` = sum(pt_year_12to59)) %>%
+    pivot_longer(2:6, names_to = "Names.3", values_to = "Values.3"),
+    by = c("tx", "Names.1" = "Names.3")) %>%
+    mutate(Values.1 = round(Values.1,1),
+           Values.2 = round(Values.2,1),
+           Values.3 = round(Values.3,1)) %>%
+    replace_na(list(Values.2 = 0, Values.3 = 0))%>%
+    ungroup() %>%
+    mutate(phase = "0-24")
+
+flow.arm <- bind_rows(flow.arm.1, overall.flow.arm)
+
+flow.arm$tx <- factor(flow.arm$tx, levels = c("Placebo","Azithro 1-11m","Azithro 1-59m"))
+flow.arm$phase <- factor(flow.arm$phase, levels = c("0-6","6-12","12-18", "18-24", "0-24"))
+
+flow.arm <- flow.arm %>%
+    arrange(phase,tx)
+
+                  
+kable(flow.arm %>% select(-phase, -tx), "html", col.names = c("", "Random Allocation 1", "Random Allocation 2",
+                                                         "Random Allocation 3"),
+        booktabs=T, format.args = list(big.mark = ",")) %>%
+  row_spec(0,bold=TRUE) %>%
+  kableExtra::group_rows("Phase 0-6", 1, 15, label_row_css="l") %>% 
+  kableExtra::group_rows("Phase 6-12", 16, 30, label_row_css="l") %>% 
+  kableExtra::group_rows("Phase 12-18", 31, 45, label_row_css="l") %>%
+  kableExtra::group_rows("Phase 18-24", 46, 60, label_row_css="l") %>%
+  kableExtra::group_rows("Phase 0-24", 61, 75, label_row_css="l") %>%
+    pack_rows(index = c("Placebo" = 5, "Azithro 1-11 months" = 5, "Azithro 1-59 months" = 5,
+                        "Placebo" = 5, "Azithro 1-11 months" = 5, "Azithro 1-59 months" = 5,
+                        "Placebo" = 5, "Azithro 1-11 months" = 5, "Azithro 1-59 months" = 5,
+                        "Placebo" = 5, "Azithro 1-11 months" = 5, "Azithro 1-59 months" = 5,
+                        "Placebo" = 5, "Azithro 1-11 months" = 5, "Azithro 1-59 months" = 5),
+              indent = T) %>%
+  kable_styling()
+
+
+```    
+
+```{r overall phases and rando groups by arm}
+
+overall.by.arm <- pt_by_grappe %>%
+    group_by(tx) %>%
+    summarise(`Number of Grappes` = n_distinct(siteid[pt_year_1to59>0]),
+              `Number of Children` = sum(started_phase_1to59) - sum(lost_1to59),
+              `Person Years 1-59 months` = sum(pt_year_1to59),
+              `Person Years 1-11 months` = sum(pt_year_1to11),
+              `Person Years 12-59 months` = sum(pt_year_12to59)) %>%
+    pivot_longer(2:6, names_to = "Names", values_to = "Values")
+
+
+```    
+
+  
+# Session info
+```{r session info}
+sessionInfo()
+```

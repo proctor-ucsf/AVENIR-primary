@@ -1,0 +1,368 @@
+---
+title: "AVENIR Trial"
+subtitle: "Cumulative enrollment and map"
+author: "Ben Arnold F.I. Proctor Foundation (ben.arnold@ucsf.edu)"
+date: "latest run: `r Sys.time()`"
+output: 
+  html_document:
+    theme: default
+    highlight: pygments
+    code_folding: hide
+    toc: true
+    toc_depth: 3
+    toc_float:
+      collapsed: true
+      smooth_scroll: true
+---
+
+
+
+# Summary
+
+Map grappes and plot cumulative enrollment over time, colored by the three randomizations.
+
+NOTE FOR PUBLIC REPLICATION: THIS SCRIPT REQUIRES GPS LOCATIONS OF STUDY COMMUNITIES, WHICH ARE CONSIDERED IDENTIFIABLE. THESE DATA ARE NOT AVAILABLE IN THE PUBLIC DATASETS
+
+We have included this script and its output for documentation but it will only run on internal datasets.
+
+# Load configuration file
+```{r preamble, message=FALSE}
+library(here)
+here()
+source(here("R","0-AVENIR-primary-Config.R"))
+```
+
+
+# Load data
+
+Load the AVENIR trial analysis dataset and GPS coordinates
+
+```{r load data}
+#-------------------------------
+# load the grappe enrollment dates
+#-------------------------------
+d_enrol <- read_csv(here(randomization_data,"UNMASKED_AVENIR_grappe_enrollment_date_arm.csv")) %>%
+    rename(region2 = region)
+
+#-------------------------------
+# load the grappe gps coords
+#-------------------------------
+d_gps <- read_csv(here(final_data,"final/AVENIR_grappe_gps_2023-07-31.csv")) %>%
+    rename(lat = median_latitude,
+           lon = median_longitude)
+
+#-------------------------------
+# join gps to enrollment data
+#-------------------------------
+d1 <- d_gps %>%
+    left_join(d_enrol, by=c("site_code"))
+
+# confirm it was a clean 1:1 join
+nrow(d1) == nrow(d_enrol)
+nrow(d1) == nrow(d_gps)
+
+# Recode tx labels to align with ms nomenclature
+d2 <- d1 %>%
+    mutate(
+    tx = case_when(
+        tx == "1 - Azithro 1-59m" ~ "Child Azithro",
+        tx == "2 - Azithro 1-11m" ~ "Infant Azithro",
+        tx == "3 - Placebo 1-59m" ~ "Placebo"
+    ),
+    tx = factor(tx, levels = c("Child Azithro","Infant Azithro","Placebo"))
+           ) %>%
+    # shorten adaptive randomization labels
+    mutate(adaptive_rand = factor(adaptive_rand, 
+                                  levels = c("Random Allocation 1", "Random Allocation 2", "Random Allocation 3"),
+                                  labels = c("Randomization 1", "Randomization 2", "Randomization 3")))
+
+```
+
+# Cumulative enrollment by treatment and randomization phase
+
+```{r tally cumulative enrollment by week, message = F, warning=F}
+
+#-------------------------------
+# sum the number of grappes
+# enrolled in each week of the
+# trial. Then get the cumulative
+# sum
+# do separately by randomization
+# and tx
+#-------------------------------
+d_cumenrol <- d2 %>%
+    # mutate(region2 = ifelse(site_code == "1-04-43-085", "Dosso Part1", region)) %>% # from Brittany, mis-categorized grappe
+    mutate(start_date = as.Date(started_time, "%m/%d/%y"),
+           min_date = min(start_date),
+           enrol_week = floor(as.numeric(difftime(start_date,min_date, units = "weeks"))),
+           enrol_week_ch = as.character(enrol_week)) %>%
+    group_by(adaptive_rand,tx,enrol_week) %>%
+    summarise(n = n()) %>%
+    group_by(adaptive_rand,tx) %>%
+    mutate(cumsum = cumsum(n)) 
+
+#-------------------------------
+# get the enrollment totals
+# by randomization and tx
+# match these to the max
+# enrollment week in the data
+# set n=0 (no new enrolled)
+# for these observations
+# as they are just placeholders
+# for making the figure
+#-------------------------------
+d_enrol_totals <- d_cumenrol %>%
+                  group_by(adaptive_rand,tx) %>%
+                  summarise(cumsum = max(cumsum)) %>%
+                  mutate(enrol_week = max(d_cumenrol$enrol_week), 
+                         n=0)
+
+# confirm cumsum totals match input data
+sum(d_enrol_totals$cumsum) == nrow(d2)
+
+#-------------------------------
+# add the enrollment totals
+# to a final observation in the
+# data to get the cumulative
+# totals to run through the
+# end of the trial
+#-------------------------------
+d_cumenrol2 <- d_cumenrol %>%
+    bind_rows(d_enrol_totals) %>%
+    distinct() %>%
+    arrange(adaptive_rand,tx,enrol_week) %>%
+    # reverse the randomization factor for plotting
+    mutate(adaptive_rand = factor(adaptive_rand, 
+                                  levels = c("Randomization 3", "Randomization 2", "Randomization 1")))
+
+
+#-------------------------------
+# save the allocation times
+# for each adaptation, to be
+# used in the figure
+#-------------------------------
+adapt_week <- d_cumenrol2 %>% 
+    group_by(adaptive_rand) %>% 
+    summarise(adapt_time = min(enrol_week))
+
+adapt_week
+
+```
+
+```{r plot cumulative grappe enrollment}
+#-------------------------------
+# plot cumulative enrollment
+#-------------------------------
+# pcols <- cbpal[c(8,7,6)]
+pcols <- brewer_pal(palette = "YlOrRd")(9)[c(5,7,9)]
+
+plot_cum_enrol <- ggplot(d_cumenrol2, aes(x = enrol_week, y = cumsum, fill = adaptive_rand)) +
+    geom_area(alpha=0.9) +
+    # geom_vline(xintercept = adapt_week$adapt_time[adapt_week$adaptive_rand=="Randomization 2"], 
+    #            linetype = "solid", color = "grey20") +
+    # geom_vline(xintercept = adapt_week$adapt_time[adapt_week$adaptive_rand=="Randomization 3"], 
+    #            linetype = "solid", color = "grey20") +
+    scale_x_continuous(breaks = seq(0,120,by=40)) +
+    scale_y_continuous(breaks=seq(0,1200,by=200))+
+    scale_fill_manual(values = pcols) +
+    # scale_fill_brewer(type="seq") +
+    xlab("Study week") +
+    ylab("Cumulative communities enrolled") +
+    theme_minimal() +
+    facet_wrap(~tx) + 
+    guides(fill=guide_legend(reverse = TRUE, title=""))  +
+    theme(
+        legend.position = "none",
+        panel.grid.minor = element_blank(),
+        panel.grid.major.x = element_blank(),
+        axis.ticks.x = element_line()
+    )
+
+plot_cum_enrol
+```  
+
+# Randomization probabilities
+```{r plot randomization probabilities}
+#-------------------------------
+# enter the adaptive randomization
+# probabilities from Travis
+#-------------------------------
+rprobs <- data.frame(tx=rep(c("Child Azithro","Infant Azithro","Placebo"),3),
+                     adaptive_rand = rep(c("Randomization 1","Randomization 2","Randomization 3"),c(3,3,3)),
+                     rand = rep(c("1","2","3"),c(3,3,3)),
+                     prob = c(0.333 ,0.333, 0.333, 
+                              0.499, 0.204, 0.297,
+                              0.554, 0.209, 0.237
+                              )
+                     ) %>%
+    mutate(tx = factor(tx,levels=levels(d2$tx)),
+           adaptive_rand = factor(adaptive_rand, levels=levels(d2$adaptive_rand)))
+
+#-------------------------------
+# make a bar plot of probabilities
+#-------------------------------
+
+plot_rprobs <- ggplot(data=rprobs, aes(x = rand, y = prob, fill = adaptive_rand)) + 
+    facet_grid(~tx) +
+    geom_bar(stat = "identity", color = NA, alpha = 1) +
+    geom_text(aes(y = prob+0.04, label = prob), size=2) +
+    scale_y_continuous(breaks=seq(0,0.6,by=0.2)) +
+    scale_fill_manual(values = rev(pcols)) +
+    labs(x = "Randomization", y = "Allocation prob.") +
+    coord_cartesian(ylim=c(0,0.6)) +
+    theme_minimal() +
+    theme(
+        legend.position = "none",
+        panel.grid.minor.y = element_blank(),
+        panel.grid.major = element_blank(), 
+        axis.ticks.y = element_line()
+        
+    )
+
+plot_rprobs
+```
+
+# Map grappes (communities)
+
+```{r convert to spatial data}
+#-------------------------------
+# format grappe data as sf
+#-------------------------------
+d_sf <- st_as_sf(d2, coords=c("lon","lat"), 
+                 crs=4326) # set coordinate ref system to WGS1984
+
+```
+
+```{r download admin shapes}
+
+#-------------------------------
+# load administrative boundaries
+# downloaded from 
+# humanitarian data exchange
+# https://data.humdata.org/dataset/cod-ab-ner?
+#-------------------------------
+
+niger_adm0 <- st_read(dsn = here("data/ner_adm_shapefiles","ner_adm00_feb2018"))
+niger_adm1 <- st_read(dsn = here("data/ner_adm_shapefiles","ner_adm01_feb2018"))
+niger_adm2 <- st_read(dsn = here("data/ner_adm_shapefiles","ner_adm02_feb2018"))
+
+# filter admin level 2 subdistricts to just Dosso and Tahoua
+niger_adm2 <- niger_adm2 %>%
+    filter(adm_01 %in% c("Dosso","Tahoua"))
+
+#-------------------------------
+# create a zoom window, and
+# a cropped version of the admin
+# polygons
+#-------------------------------
+sf_use_s2(FALSE)
+niger_dists_cr <- st_crop(niger_adm1, xmin = 0, xmax = 7,
+                                    ymin = 11, ymax = 19)
+
+```
+
+```{r map grappes}
+# zoomed out overview of Niger
+plot_niger_admin <- ggplot() +
+    geom_sf(data=niger_adm1, color="black",lwd=0.5) +
+    # geom_sf(data=niger_gadm0_sf, color="black",lwd=0.5) +
+    coord_sf(crs = 4326) +
+    geom_rect(aes(xmin = 0, xmax = 7, ymin = 11, ymax = 19), color = "black", fill = NA, lty = "dashed", inherit.aes = FALSE) +
+    # add country labels
+    annotate("text",x=4,y=22, label = "Niger", fontface="bold",size=8) +
+    labs(x="",y="") +
+    theme_minimal() +
+    theme(
+        panel.grid.major = element_blank(),
+        panel.grid = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        plot.margin = margin(0,0,0,0, "pt")
+        
+          )
+    
+plot_niger_admin
+
+# annotation line
+dosso_lab_line <- data.frame(x1=4.45,x2=4.1,y1=12.5,y2=12.7)
+tahoua_lab_line <-  data.frame(x1=5.9,x2=5.5,y1=17.9,y2=17.5)
+    
+    
+# detailed zoom view, including grappes
+plot_grappe_map <- ggplot() +
+    # admin labels
+    annotate("text",x=6,y=18.2, label = "Tahoua", fontface = "bold", color = "gray80", size=8) + # x=5.2,y=16.2,
+    annotate("text",x=5.4,y=12.5, label = "Dosso", fontface = "bold", color = "gray80", size=8) +
+    geom_segment(data=dosso_lab_line, aes(x=x1, xend=x2, y=y1, yend=y2), color = "gray60", lwd=0.8, arrow=arrow(angle=30,length=unit(2,"mm"),ends="last",type="open")) +
+    geom_segment(data=tahoua_lab_line, aes(x=x1, xend=x2, y=y1, yend=y2), color = "gray60", lwd=0.8, arrow=arrow(angle=30,length=unit(2,"mm"),ends="last",type="open")) +
+    # admin boundaries
+    geom_sf(data=niger_adm2, fill=NA, color="black",lwd=0.3) +
+    geom_sf(data=niger_adm1, fill=NA, color="black",lwd=1) + 
+    # cluster points
+    geom_sf(data=d_sf, aes(color=adaptive_rand),size=0.1, alpha=0.9, pch=19) +
+    coord_sf(crs = 4326,
+             xlim = c(0, 7), ylim = c(11, 19),
+             expand = FALSE) +
+    # scale_shape_manual(values=c(15,16,17)) +
+    # scale_color_brewer(type="seq") +
+    scale_color_manual(values=rev(pcols)) +
+    annotation_scale(location = "br", width_hint = 0.3, pad_y=unit(0.1,"cm")) +
+    annotation_north_arrow(location = "br", which_north = "true", 
+        pad_x = unit(0.05, "in"), pad_y = unit(0.2, "in"),
+        height=unit(0.75,"cm"), width=unit(0.75,"cm"),
+        style = north_arrow_fancy_orienteering
+        ) +
+    labs(x="Longitude",y="Latitude") +
+    guides(color=guide_legend(reverse = FALSE, title="", override.aes = list(size=4)))  +
+    theme_minimal() +
+    theme(
+        legend.position = "bottom"
+    )
+
+plot_grappe_map
+
+plot_map_with_inset <- plot_grappe_map + 
+    inset_element(plot_niger_admin,
+                  left = unit(0.12, "npc"), top = unit(1.35, "npc"),
+                  bottom = unit(0.2, "npc"), right = unit(0.52, "npc"),
+                  ignore_tag = TRUE
+    )
+
+# see patch for existing bug in patchwork for geom_sf
+# https://stackoverflow.com/questions/18252827/increasing-area-around-plot-area-in-ggplot2
+plot_map_with_inset$patches$layout$widths  <- 1
+plot_map_with_inset$patches$layout$heights <- 1
+
+plot_map_with_inset
+```
+
+# Composite figure
+
+```{r make overall composite, fig.width=10, fig.height=10}
+
+layout <- "
+AB
+AC
+AC
+"
+patchwork_composite_fig1 <-  plot_map_with_inset  + plot_rprobs + plot_cum_enrol +
+    plot_layout(design = layout, widths = c(0.7,0.3)) +
+    plot_annotation(tag_levels = 'A') & 
+    theme(plot.tag = element_text(size = 16, face = "bold"))
+
+patchwork_composite_fig1
+
+ggsave(filename = here("output","Figure-1-avenir-enrollment-map.pdf"), 
+       patchwork_composite_fig1,
+       device = "pdf", 
+       width = 250,
+       height = 160,
+       units = "mm")
+```
+
+# Session Info
+```{r session info}
+sessionInfo()
+```
+
+

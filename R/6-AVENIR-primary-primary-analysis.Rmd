@@ -1,0 +1,811 @@
+---
+title: "AVENIR Trial"
+subtitle: "Primary outcome analysis, all cause mortality"
+author: "Ben Arnold F.I. Proctor Foundation (ben.arnold@ucsf.edu)"
+date: "latest run: `r Sys.time()`"
+output: 
+  html_document:
+    theme: default
+    highlight: pygments
+    code_folding: hide
+    toc: true
+    toc_depth: 3
+    toc_float:
+      collapsed: true
+      smooth_scroll: true
+---
+
+
+
+# Summary
+
+Primary analysis for the AVENIR trial
+
+# Load configuration file
+```{r preamble, message=FALSE}
+library(here)
+here()
+source(here("R","0-AVENIR-primary-Config.R"))
+```
+
+
+# Load data
+
+Load the AVENIR trial analysis dataset
+
+```{r load data}
+#-------------------------------
+# load the grappe-phase level 
+# dataset
+#-------------------------------
+d1 <- read_rds(here("data","AVENIR_grappe_phase_public.rds")) %>%
+  rename(siteid = siteid_public)
+
+# Recode tx labels to make them easier to read
+d2 <- d1 %>%
+    mutate(
+    tx = case_when(
+        tx == "3 - Placebo 1-59m" ~ "Placebo",
+        tx == "2 - Azithro 1-11m" ~ "Azithro 1-11m",
+        tx == "1 - Azithro 1-59m" ~ "Azithro 1-59m"
+    ),
+    tx = factor(tx, levels = c("Placebo","Azithro 1-11m","Azithro 1-59m"))
+           )
+
+#-------------------------------
+# pivot the data to be long
+# by different age groups to
+# make lots of the analyses
+# and visualizations below easier
+#-------------------------------
+d2_long_ndeaths <- d2 %>%
+    select(siteid,tx,adaptive_rand,district,phase, starts_with("n_deaths_")) %>%
+    pivot_longer(cols = starts_with("n_deaths"), names_to = "age_group", names_prefix = "n_deaths_", values_to = "ndeaths")
+d2_long_py<- d2 %>%
+    select(siteid,tx,adaptive_rand,district,phase, starts_with("pt_year_")) %>%
+    pivot_longer(cols = starts_with("pt_year_"), names_to = "age_group", names_prefix = "pt_year_", values_to = "py")
+d2_long <- d2_long_ndeaths %>%
+    left_join(d2_long_py, by = c("siteid","tx","adaptive_rand","district","phase","age_group")) %>%
+    mutate(age_group = factor(age_group, levels=c("1to59","1to11","12to59")))
+
+```
+
+Confirm that number of deaths and person-time sum correctly for different age groups
+
+```{r persontime death internal consistency check}
+table(d2$n_deaths_12to59 + d2$n_deaths_1to11 == d2$n_deaths_1to59) # exactly equal because of integers
+table(d2$pt_year_12to59 + d2$pt_year_1to11 - d2$pt_year_1to59 < 0.000001) # tol due to machine precision
+```
+## Collapse to grappe-level data
+
+Sum over census intervals for grappe-level totals
+
+```{r collapse to grappe level datasets for analysis}
+#-------------------------------
+# summarize 1-59m deaths and pt 
+# by grappe for analysis
+# restrict to Placebo and 1-59m
+#-------------------------------
+table(d2$pt_year_1to59>0)
+# summarize to grappe-level data
+d1to59_cl <- d2 %>%
+    filter(tx %in% c("Placebo","Azithro 1-59m") ) %>%
+      group_by(siteid, adaptive_rand, tx) %>%
+      summarize(ndeaths = sum(n_deaths_1to59),
+                py = sum(pt_year_1to59), 
+                .groups = "drop") %>%
+    # limit to grappes with >0 person-years at risk
+    # drops 20 grappes
+    filter(py>0)
+table(d1to59_cl$tx)
+
+#-------------------------------
+# summarize 1-59m deaths and pt 
+# by grappe
+# restrict to Placebo and 1-11m
+#-------------------------------
+# restrict to grappes with py>0 (drops 95 grappes)
+table(d2$pt_year_1to11>0)
+d1to11_cl <- d2 %>%
+    filter(tx %in% c("Placebo","Azithro 1-11m") ) %>%
+      group_by(siteid, adaptive_rand, tx) %>%
+      summarize(ndeaths = sum(n_deaths_1to11),
+                py = sum(pt_year_1to11), 
+                .groups = "drop") %>%
+    # limit to grappes with >0 person-years at risk
+    filter(py>0)
+table(d1to11_cl$tx)
+
+#-------------------------------
+# summarize 12-59m deaths and pt 
+# by grappe
+# restrict to 1-59m and 1-11m
+#-------------------------------
+# summarize to grappe-level data
+# restrict to grappes with py>0 (drops 23 grappes)
+table(d2$pt_year_12to59>0)
+d12to59_cl <- d2 %>%
+    filter(tx %in% c("Azithro 1-59m","Azithro 1-11m") ) %>%
+      group_by(siteid, adaptive_rand, tx) %>%
+      summarize(ndeaths = sum(n_deaths_12to59),
+                py = sum(pt_year_12to59), 
+                .groups = "drop") %>%
+    # limit to grappes with >0 person-years at risk
+    filter(py>0)
+table(d12to59_cl$tx)
+
+
+```
+
+# Mortality rates
+
+## Grappe level distributions
+
+Summarize person-time, deaths, and mortality rates by grappe
+
+```{r summarize person time deaths and mrate by grappe}
+#-------------------------------
+# summarize data at the grappe
+# level, then pivot the data
+# to long format to plot
+#-------------------------------
+dcl <- d2 %>%
+    group_by(siteid, adaptive_rand, tx) %>%
+    summarize(ndeaths1to59 = sum(n_deaths_1to59),
+              pt1to59 = sum(pt_year_1to59), 
+              ndeaths1to11 = sum(n_deaths_1to11),
+              pt1to11 = sum(pt_year_1to11), 
+              ndeaths12to59 = sum(n_deaths_12to59),
+              pt12to59 = sum(pt_year_12to59), 
+                .groups = "drop")
+dcl_deaths <- dcl %>%
+    select(siteid, adaptive_rand, tx, starts_with("ndeaths")) %>%
+    pivot_longer(cols = starts_with("ndeaths"), names_to = "age_group", names_prefix = "ndeaths", values_to = "ndeaths")
+dcl_pt <- dcl %>%
+    select(siteid, adaptive_rand, tx, starts_with("pt")) %>%
+    pivot_longer(cols = starts_with("pt"), names_to = "age_group", names_prefix = "pt", values_to = "py")
+dcl2 <- dcl_deaths %>%
+    left_join(dcl_pt, by = c("siteid","adaptive_rand","tx", "age_group")) %>%
+    mutate(age_group = factor(age_group, levels=c("1to59","1to11","12to59")),
+           mrate = ndeaths / py * 1000)
+
+```
+
+
+```{r plot person time distributions}
+#-------------------------------
+# plot person-time by grappe and age range
+#
+# plot each age range separately
+# to allow the axes to vary
+# since the range differs quite a bit
+#-------------------------------
+dcl2 %>%
+    group_by(age_group) %>%
+    summarize(totpt = sum(py))
+
+pcols <- cbpal[c(6,7,8)]
+
+pt_dist_1to59 <- ggplot(data=dcl2 %>% filter(age_group == "1to59"), aes(x=py)) +
+    geom_histogram(color=NA, fill=pcols[1], alpha=0.7, binwidth=10) +
+    labs(x = "person-years at risk", y = "number of grappes", title = "Grappe-level person-years at risk 1-59m") +
+    theme_minimal()
+pt_dist_1to59
+
+pt_dist_1to11 <- ggplot(data=dcl2 %>% filter(age_group == "1to11"), aes(x=py)) +
+    geom_histogram(color=NA, fill=pcols[2], alpha=0.7, binwidth=5) +
+    labs(x = "person-years at risk", y = "number of grappes", title = "Grappe-level person-years at risk 1-11m") +
+    theme_minimal()
+pt_dist_1to11
+
+pt_dist_12to59 <- ggplot(data=dcl2 %>% filter(age_group == "12to59"), aes(x=py)) +
+    geom_histogram(color=NA, fill=pcols[3], alpha=0.7, binwidth=10) +
+    labs(x = "person-years at risk", y = "number of grappes", title = "Grappe-level person-years at risk 12-59m") +
+    theme_minimal()
+pt_dist_12to59
+
+```
+
+```{r plot death distributions}
+#-------------------------------
+# plot deaths by grappe and age range
+#
+# plot each age range separately
+# to allow the axes to vary
+# since the range differs quite a bit
+#-------------------------------
+dcl2 %>%
+    group_by(age_group) %>%
+    summarize(totdeaths = sum(ndeaths))
+
+ndeath_dist_1to59 <- ggplot(data=dcl2 %>% filter(age_group == "1to59"), aes(x=ndeaths)) +
+    geom_histogram(color=NA, fill=pcols[1], alpha=0.7, binwidth=1) +
+    labs(x = "number of deaths", y = "number of grappes", title = "Grappe-level deaths 1-59m") +
+    theme_minimal()
+ndeath_dist_1to59
+
+ndeath_dist_1to11 <- ggplot(data=dcl2 %>% filter(age_group == "1to11"), aes(x=ndeaths)) +
+    geom_histogram(color=NA, fill=pcols[2], alpha=0.7, binwidth=1) +
+    scale_x_continuous(breaks=seq(0,10,by=2)) +
+    labs(x = "number of deaths", y = "number of grappes", title = "Grappe-level deaths 1-11m") +
+    theme_minimal()
+ndeath_dist_1to11
+
+ndeath_dist_12to59 <- ggplot(data=dcl2 %>% filter(age_group == "12to59"), aes(x=ndeaths)) +
+    geom_histogram(color=NA, fill=pcols[3], alpha=0.7, binwidth=1) +
+
+    labs(x = "number of deaths", y = "number of grappes", title = "Grappe-level deaths 12-59m") +
+    theme_minimal()
+ndeath_dist_12to59
+
+```
+
+```{r plot mortality rate distribution}
+#-------------------------------
+# plot mortality rate by grappe and age range
+#-------------------------------
+dcl2 %>%
+    group_by(age_group) %>%
+    summarize(totdeaths = sum(ndeaths),
+              totpt = sum(py)) %>%
+    mutate(mrate = totdeaths/totpt*1000)
+
+mrate_dist_1to59 <- ggplot(data=dcl2 %>% filter(age_group=="1to59"), aes(x=mrate)) +
+    geom_histogram(color=NA, fill=pcols[1], alpha=0.7, binwidth=10) +
+    labs(x = "mortality rate per 1000 person-years", y = "number of grappes", title = "Grappe-level mortality rate 1-59m") +
+    theme_minimal()
+mrate_dist_1to59
+
+mrate_dist_1to11 <- ggplot(data=dcl2 %>% filter(age_group=="1to11"), aes(x=mrate)) +
+    geom_histogram(color=NA, fill=pcols[2], alpha=0.7, binwidth=10) +
+    labs(x = "mortality rate per 1000 person-years", y = "number of grappes", title = "Grappe-level mortality rate 1-11m") +
+    theme_minimal()
+mrate_dist_1to11
+
+mrate_dist_12to59 <- ggplot(data=dcl2 %>% filter(age_group=="12to59"), aes(x=mrate)) +
+    geom_histogram(color=NA, fill=pcols[3], alpha=0.7, binwidth=10) +
+    labs(x = "mortality rate per 1000 person-years", y = "number of grappes", title = "Grappe-level mortality rate 12-59m") +
+    theme_minimal()
+mrate_dist_12to59
+
+
+#-------------------------------
+# list outliers
+#-------------------------------
+ dcl2 %>% select(-tx) %>% filter(age_group=="1to59", mrate>=100) %>% arrange(-mrate)
+ dcl2 %>% select(-tx) %>% filter(age_group=="1to11", mrate>=100) %>% arrange(-mrate)
+ dcl2 %>% select(-tx) %>% filter(age_group=="12to59", mrate>=100) %>% arrange(-mrate)
+
+```
+
+
+## Overall rates
+
+Summarize the mortality rates by age, treatment, phase, and randomization group
+
+```{r estimate mortality rates by tx group}
+#-------------------------------
+# summarize the mortality rates
+# by treatment
+#-------------------------------
+d_mrates_tx <- d2_long %>%
+    group_by(tx, age_group) %>%
+    summarize(ndeaths = sum(ndeaths), py = sum(py), .groups = "drop") %>%
+    mutate(mrate = 1000*ndeaths/py) %>%
+    select(age_group, tx, ndeaths, py, mrate) %>%
+    arrange(age_group, tx)
+
+kbl(d_mrates_tx, digits = c(0,0,0,0,1), format.args = list(big.mark = ","),
+    caption = "Mortality rates by treatment and age group") %>%
+    kableExtra::kable_styling(bootstrap_options = "striped")
+
+#-------------------------------
+# summarize the mortality rates
+# by interval (phase)
+#-------------------------------
+d_mrates_phase <- d2_long %>%
+    group_by(phase, age_group) %>%
+    summarize(ndeaths = sum(ndeaths), py = sum(py), .groups = "drop") %>%
+    mutate(mrate = 1000*ndeaths/py) %>%
+    select(age_group, phase, ndeaths, py, mrate) %>%
+    arrange(age_group, phase)
+
+kbl(d_mrates_phase, digits = c(0,0,0,0,1), format.args = list(big.mark = ","),
+    caption = "Mortality rates by phase and age group") %>%
+    kableExtra::kable_styling(bootstrap_options = "striped")
+
+#-------------------------------
+# summarize the mortality rates
+# by arm and age group
+# stratified by randomization group
+#-------------------------------
+d_mrates_tx_rand <- d2_long %>%
+    group_by(tx, adaptive_rand, age_group) %>%
+    summarize(ndeaths = sum(ndeaths), py = sum(py), .groups = "drop") %>%
+    mutate(mrate = 1000*ndeaths/py) %>%
+    select(age_group, tx, adaptive_rand, ndeaths, py, mrate) %>%
+    arrange(age_group, tx, adaptive_rand)
+
+kbl(d_mrates_tx_rand, digits = c(0,0,0,0,0,1), format.args = list(big.mark = ","),
+    caption = "Mortality rates for by treatment, randomization group, and age") %>%
+    kableExtra::kable_styling(bootstrap_options = "striped")
+
+#-------------------------------
+# summarize the mortality rates
+# by treatment and age group
+# stratified by interval
+#
+# also include 12-59m since we
+# will probably make a figure
+# with all three mortality rates
+#-------------------------------
+d_mrates_tx_phase <- d2_long %>%
+    group_by(tx, phase, age_group) %>%
+    summarize(ndeaths = sum(ndeaths), py = sum(py), .groups = "drop") %>%
+    mutate(mrate = 1000*ndeaths/py) %>%
+    select(age_group, tx, phase, ndeaths, py, mrate) %>%
+    arrange(age_group, tx, phase)
+
+kbl(d_mrates_tx_phase, digits = c(0,0,0,0,0,1), format.args = list(big.mark = ","),
+    caption = "Mortality rates by treatment, phase, and age group") %>%
+    kableExtra::kable_styling(bootstrap_options = "striped")
+
+```
+
+
+```{r bootstrap mortality by treatment}
+#-------------------------------
+# estimate bootstrap 95% CIs for
+# the treatment mortality rate
+# estimates
+# 
+# bootstrap the grappe-phase
+# level data, resampling grappes
+# with replacement
+#
+# Use 100k replicates since
+# we are estimating rates to 
+# 6 decimal places of precision
+# with 10k reps were getting
+# slight differences in the last
+# sig digit in some 95% CIs
+# depending on the computer used
+# to estimate, even with seeds
+#-------------------------------
+# set a timer just to get a sense
+start_time <- Sys.time()
+
+breps <- 100000
+clids <- unique(dcl2$siteid)
+bsamp <- matrix(sample(clids, size = length(clids)*breps, replace=TRUE), nrow=length(clids), ncol=breps)
+boot_mrates_tx <- foreach(booti = 1:breps, .combine = rbind) %dopar% {
+    set.seed(booti)
+    di <- left_join(data.frame(siteid=bsamp[,booti]), dcl2, by = "siteid") %>%
+        group_by(tx,age_group) %>%
+        summarize(ndeaths = sum(ndeaths), py = sum(py), .groups = "drop")
+    di$brep <- booti
+    return(di)
+}
+
+boot_mrates_tx2 <- boot_mrates_tx %>%
+    mutate(mrate = 1000*ndeaths/py) %>%
+    group_by(tx, age_group) %>%
+    mutate(mrate_min95 = quantile(mrate, probs = 0.025),
+           mrate_max95 = quantile(mrate, probs = 0.975)) %>%
+    select(tx, age_group, ends_with("min95"), ends_with("max95")) %>%
+    distinct()
+
+#-------------------------------
+# join bootstrap 95% CIs
+# to the rate estimates
+#-------------------------------
+d_mrates_tx2 <- d_mrates_tx %>%
+    left_join(boot_mrates_tx2, by=c("tx", "age_group"))
+
+# check time required
+stop_time <- Sys.time()
+difftime(stop_time,start_time)
+
+```
+
+```{r table of 1to59m mortality rates}
+#-------------------------------
+# mortality rates, 1-59m
+#-------------------------------
+kbl(d_mrates_tx2 %>% filter(age_group == "1to59") %>% select(-age_group), digits = c(0,0,0,1,1,1), format.args = list(big.mark = ","),
+    caption = "Mortality rates by treatment group, 1-59 months") %>%
+    kableExtra::kable_styling(bootstrap_options = "striped")
+```
+
+```{r table of 1to11m mortality rates}
+#-------------------------------
+# mortality rates, 1-11m
+#-------------------------------
+kbl(d_mrates_tx2 %>% filter(age_group == "1to11") %>% select(-age_group), digits = c(0,0,0,1,1,1), format.args = list(big.mark = ","),
+    caption = "Mortality rates by treatment group, 1-11 months") %>%
+    kableExtra::kable_styling(bootstrap_options = "striped")
+```
+
+```{r table of 12to59m mortality rates}
+#-------------------------------
+# mortality rates, 12-59m
+#-------------------------------
+kbl(d_mrates_tx2 %>% filter(age_group == "12to59") %>% select(-age_group), digits = c(0,0,0,1,1,1), format.args = list(big.mark = ","),
+    caption = "Mortality rates by treatment group, 12-59 months") %>%
+    kableExtra::kable_styling(bootstrap_options = "striped")
+```
+
+```{r save mortality rates for later use}
+#-------------------------------
+# save mortality rate estimates
+# by treatment group and age
+# for later use
+#-------------------------------
+write_csv(d_mrates_tx2, file=here("output","avenir-mortality-primary-rates-by-tx.csv"))
+write_rds(d_mrates_tx2, file=here("output","avenir-mortality-primary-rates-by-tx.rds"))
+```
+
+# Incidence Rate Ratios
+
+```{r estimate IRRs}
+#-------------------------------
+# estimate the log IRR for 1-59m
+# comparing arms 1-59m vs Placebo
+#
+# estimate the IRR using poisson regression
+# adjust for randomization group
+#-------------------------------
+fit1to59 <- glm(ndeaths ~ tx + adaptive_rand + offset(log(py)), family = "poisson", data=d1to59_cl )
+summary(fit1to59) 
+
+#-------------------------------
+# estimate the log IRR for 1-11m
+# comparing arms 1-11m vs Placebo
+#
+# estimate the IRR using poisson regression
+# adjust for randomization group
+#-------------------------------
+fit1to11 <- glm(ndeaths ~ tx + adaptive_rand + offset(log(py)), family = "poisson", data=d1to11_cl )
+summary(fit1to11)
+
+#-------------------------------
+# estimate the log IRR for 12-59m
+# comparing arms 1-59m vs 1-11m
+#
+# estimate the IRR using poisson regression
+# adjust for randomization group
+#-------------------------------
+fit12to59 <- glm(ndeaths ~ tx + adaptive_rand + offset(log(py)), family = "poisson", data=d12to59_cl )
+summary(fit12to59)
+```
+
+```{r bootstrap IRRs for CIs}
+#-------------------------------
+# bootstrap resample clusters
+# to estimate 95% CIs for the IRR
+# IRR for 1-59m
+# comparing 1-59m vs Placebo
+#------------------------------- 
+breps <- 10000
+irr1to59boot <- foreach(booti = 1:breps, .combine = rbind) %dopar% {
+    #set seed within loop for perfect reproducibility using dopar
+    set.seed(booti)
+    di <- d1to59_cl[sample(1:nrow(d1to59_cl),replace=TRUE),]
+    fiti <- glm(ndeaths ~ tx + adaptive_rand + offset(log(py)), family="poisson", data=di )
+    return(fiti$coefficients[2])
+}
+
+( irr1to59ci <- quantile(irr1to59boot, probs=c(0.025, 0.975)) )
+
+
+#-------------------------------
+# bootstrap resample clusters
+# to estimate 95% CIs for the IRR
+# IRR for 1-11m
+# comparing 1-11m vs Placebo
+#------------------------------- 
+breps <- 10000
+irr1to11boot <- foreach(booti = 1:breps, .combine = rbind) %dopar% {
+    #set seed within loop for perfect reproducibility using dopar
+    set.seed(booti)
+    di <- d1to11_cl[sample(1:nrow(d1to11_cl),replace=TRUE),]
+    fiti <- glm(ndeaths ~ tx + adaptive_rand + offset(log(py)), family="poisson", data=di )
+    return(fiti$coefficients[2])
+}
+
+( irr1to11ci <- quantile(irr1to11boot, probs=c(0.025, 0.975)) )
+
+
+#-------------------------------
+# bootstrap resample clusters
+# to estimate 95% CIs for the IRR
+# IRR for 12-59m
+# comparing 1-59m vs 1-11m
+#------------------------------- 
+breps <- 10000
+irr12to59boot <- foreach(booti = 1:breps, .combine = rbind) %dopar% {
+    #set seed within loop for perfect reproducibility using dopar
+    set.seed(booti)
+    di <- d12to59_cl[sample(1:nrow(d12to59_cl),replace=TRUE),]
+    fiti <- glm(ndeaths ~ tx + adaptive_rand + offset(log(py)), family="poisson", data=di )
+    return(fiti$coefficients[2])
+}
+
+( irr12to59ci <- quantile(irr12to59boot, probs=c(0.025, 0.975)) )
+
+```
+
+```{r summarize IRRs}
+#------------------------------- 
+# combine IRRs into a data frame
+# exponentiate logIRRs
+#------------------------------- 
+dIRRs <- data.frame(
+    comparison = c("1-59m v Placebo", "1-11m v Placebo", "1-59m v 1-11m"),
+    irr = exp(c(fit1to59$coefficients[2], fit1to11$coefficients[2], fit12to59$coefficients[2])),
+    irr_min95 = exp(c(irr1to59ci[1],irr1to11ci[1],irr12to59ci[1])),
+    irr_max95 = exp(c(irr1to59ci[2],irr1to11ci[2],irr12to59ci[2]))
+)
+
+# print table
+kbl(dIRRs, digits = 2,
+    caption = "Incidence Rate Ratio (IRR) estimates and 95% CIs") %>%
+    kableExtra::kable_styling(bootstrap_options = "striped")
+
+```
+
+```{r save IRRs for later use}
+#-------------------------------
+# save IRR estimates for later use
+#-------------------------------
+write_csv(dIRRs, file=here("output","avenir-mortality-primary-IRRs.csv"))
+write_rds(dIRRs, file=here("output","avenir-mortality-primary-IRRs.rds"))
+```
+
+
+# Permutation tests
+
+```{r conditional permutation function}
+#-------------------------------
+# conditional permutation function
+# permute treatment within each 
+# of 3 randomization strata
+#
+# this is very much tailored to our
+# analysis dataset, but it is simple
+#
+# it stratifies the data.frame, 
+# re-permutes treatment within strata,
+# and then returns the data.frame with permuted treatment
+#
+# arguments:
+# @x a grappe-level data frame with variables tx, adaptive_rand
+#    where tx is the treatment label and adaptive_rand indicates randomization strata
+#
+# returns the same data frame, but with treatment shuffled
+#-------------------------------
+conditionally_permute <- function(x) {
+    tx1 <- x[x$adaptive_rand == "Random Allocation 1",]
+    tx2 <- x[x$adaptive_rand == "Random Allocation 2",]
+    tx3 <- x[x$adaptive_rand == "Random Allocation 3",]
+    tx1$tx <- sample(tx1$tx,size = nrow(tx1), replace=FALSE)
+    tx2$tx <- sample(tx2$tx,size = nrow(tx2), replace=FALSE)
+    tx3$tx <- sample(tx3$tx,size = nrow(tx3), replace=FALSE)
+    return(bind_rows(tx1,tx2,tx3))
+}
+
+
+
+```
+
+## Mortality 1-59m
+```{r permutation test 1to59m}
+# set a timer just to get a sense
+start_time <- Sys.time()
+
+npermute <- 100000  # use a 100k b/c p<0.001
+condp_null_1to59 <- foreach(permi = 1:npermute, .combine = rbind) %dopar% {
+    
+    # set seed within %dopar% for perfect replication
+    set.seed(permi)
+
+    #-------------------------------
+    # permute the tx assignments
+    # conditional on
+    # randomization groups 1-3
+    # sample w/o replacement within group
+    #-------------------------------
+    di <- conditionally_permute(d1to59_cl)
+    
+    #-------------------------------
+    # fit a model
+    # store the log IRR as the
+    # test statistic
+    #-------------------------------
+    fiti <- glm(ndeaths ~ tx + adaptive_rand + offset(log(py)), family="poisson", data=di)
+    logirr <- fiti$coefficients[2]
+    return(data.frame(logirr=logirr))
+    
+}
+
+# check time required
+stop_time <- Sys.time()
+difftime(stop_time,start_time)
+
+#-------------------------------
+# calculate the 2-sided 
+# permutation test p-value
+# the probability of observing
+# a logIRR more extreme than
+# that observed (absolute value 
+# to make it 2-sided).
+# get the exact binomial 95% CI
+#-------------------------------
+obs_irr_1to59 <- fit1to59$coefficients[2]
+p_value_1to59 <- sum(abs(condp_null_1to59$logirr) >= abs(obs_irr_1to59)) / length(condp_null_1to59$logirr)
+p_value_1to59_ci <- binom.test(sum(abs(condp_null_1to59$logirr) >= abs(obs_irr_1to59)), length(condp_null_1to59$logirr))$conf.int
+cat("1-59m v Placebo, Permutation P-value,",format(npermute,big.mark=",",scientific = FALSE),"permutations:", format(p_value_1to59,nsmall=5,scientific=FALSE),
+    "\n                                             Exact 95% CI:",sprintf("%1.4f",p_value_1to59_ci[1]),"to",sprintf("%1.4f",p_value_1to59_ci[2]), "\n")
+    
+```
+
+```{r plot 1to59m permutation distribution}
+#-------------------------------
+# plot the null distribution 
+# with the empirical value
+# 1-59m vs Placebo
+#-------------------------------
+ggplot(condp_null_1to59, aes(x=logirr)) + 
+  geom_histogram(alpha = 0.3, color = "gray20", bins = 50) +
+  geom_vline(xintercept = obs_irr_1to59, color="black") +
+  labs(x="Null distribution of log(IRR) for 1-59 month mortality (1-59m vs Placebo)",
+       y="number of permutations") +
+  theme_minimal()
+
+```
+
+
+
+## Mortality 1-11m
+```{r permutation test 1to11m}
+
+# set a timer just to get a sense
+start_time <- Sys.time()
+
+npermute <- 10000
+condp_null_1to11 <- foreach(permi = 1:npermute, .combine = rbind) %dopar% {
+    
+    # set seed within %dopar% for perfect replication
+    set.seed(permi)
+
+    #-------------------------------
+    # permute the tx assignments
+    # conditional on
+    # randomization groups 1-3
+    # sample w/o replacement within group
+    #-------------------------------
+    di <- conditionally_permute(d1to11_cl)
+    
+    #-------------------------------
+    # fit a model
+    # store the log IRR as the
+    # test statistic
+    #-------------------------------
+    fiti <- glm(ndeaths ~ tx + adaptive_rand + offset(log(py)), family="poisson", data=di)
+    logirr <- fiti$coefficients[2]
+    return(data.frame(logirr=logirr))
+    
+}
+
+# check time required
+stop_time <- Sys.time()
+difftime(stop_time,start_time)
+
+#-------------------------------
+# calculate the 2-sided 
+# permutation test p-value
+# the probability of observing
+# a logIRR more extreme than
+# that observed (absolute value 
+# to make it 2-sided).
+# get the exact binomial 95% CI
+#-------------------------------
+obs_irr_1to11 <- fit1to11$coefficients[2]
+p_value_1to11 <- sum(abs(condp_null_1to11$logirr) >= abs(obs_irr_1to11)) / length(condp_null_1to11$logirr)
+p_value_1to11_ci <- binom.test(sum(abs(condp_null_1to11$logirr) >= abs(obs_irr_1to11)), length(condp_null_1to11$logirr))$conf.int
+cat("1-11m v Placebo, Permutation P-value,",format(npermute,big.mark=","),"permutations:", sprintf("%1.3f",p_value_1to11),
+    "\n                                             Exact 95% CI:",sprintf("%1.3f",p_value_1to11_ci[1]),"to",sprintf("%1.3f",p_value_1to11_ci[2]), "\n")
+    
+```
+
+```{r plot 1to11m permutation distribution}
+#-------------------------------
+# plot the null distribution 
+# with the empirical value
+# 1-11m vs Placebo
+#-------------------------------
+ggplot(condp_null_1to11, aes(x=logirr)) + 
+  geom_histogram(alpha = 0.3, color = "gray20", bins = 50) +
+  geom_vline(xintercept = obs_irr_1to11, color="black") +
+  labs(x="Null distribution of log(IRR) for 1-11 month mortality (1-11m vs Placebo)",
+       y="number of permutations") +
+  theme_minimal()
+
+```
+
+
+
+## Mortality 12-59m
+```{r permutation test 12to59m}
+
+# set a timer just to get a sense
+start_time <- Sys.time()
+
+npermute <- 10000
+condp_null_12to59 <- foreach(permi = 1:npermute, .combine = rbind) %dopar% {
+    
+    # set seed within %dopar% for perfect replication
+    set.seed(permi)
+
+    #-------------------------------
+    # permute the tx assignments
+    # conditional on
+    # randomization groups 1-3
+    # sample w/o replacement within group
+    #-------------------------------
+    di <- conditionally_permute(d12to59_cl)
+    
+    #-------------------------------
+    # fit a model
+    # store the log IRR as the
+    # test statistic
+    #-------------------------------
+    fiti <- glm(ndeaths ~ tx + adaptive_rand + offset(log(py)), family="poisson", data=di)
+    logirr <- fiti$coefficients[2]
+    return(data.frame(logirr=logirr))
+    
+}
+
+# check time required
+stop_time <- Sys.time()
+difftime(stop_time,start_time)
+
+#-------------------------------
+# calculate the 2-sided 
+# permutation test p-value
+# the probability of observing
+# a logIRR more extreme than
+# that observed (absolute value 
+# to make it 2-sided).
+#-------------------------------
+obs_irr_12to59 <- fit12to59$coefficients[2]
+p_value_12to59 <- sum(abs(condp_null_12to59$logirr) >= abs(obs_irr_12to59)) / length(condp_null_12to59$logirr)
+p_value_12to59_ci <- binom.test(sum(abs(condp_null_12to59$logirr) >= abs(obs_irr_12to59)), length(condp_null_12to59$logirr))$conf.int
+cat("12-59m v Placebo, Permutation P-value,",format(npermute,big.mark=","),"permutations:", sprintf("%1.3f",p_value_12to59),
+    "\n                                             Exact 95% CI:",sprintf("%1.3f",p_value_12to59_ci[1]),"to",sprintf("%1.3f",p_value_12to59_ci[2]), "\n")
+    
+```
+
+
+```{r plot 12to59m permutation distribution}
+#-------------------------------
+# plot the null distribution 
+# with the empirical value
+# 1-59m vs 1-11m
+#-------------------------------
+ggplot(condp_null_12to59, aes(x=logirr)) + 
+  geom_histogram(alpha = 0.3, color = "gray20", bins = 50) +
+  geom_vline(xintercept = obs_irr_12to59, color="black") +
+  xlab("Null distribution of log(IRR) for 12-59 month mortality (1-59m vs 1-11m)") +
+  theme_minimal()
+
+```
+
+
+
+# Session Info
+```{r session info}
+sessionInfo()
+```
+
+

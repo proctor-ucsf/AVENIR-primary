@@ -1,0 +1,306 @@
+---
+title: "AVENIR Trial"
+subtitle: "Between-cluster SD of mortality rates"
+author: "Ben Arnold F.I. Proctor Foundation (ben.arnold@ucsf.edu)"
+date: "latest run: `r Sys.time()`"
+output: 
+  html_document:
+    theme: default
+    highlight: pygments
+    code_folding: hide
+    toc: true
+    toc_depth: 3
+    toc_float:
+      collapsed: true
+      smooth_scroll: true
+---
+
+
+
+# Summary
+
+Estimate the between-cluster SD of the mortality rates in different age ranges.  
+
+Estimate them separately by arm.  
+
+Summarize the coefficient of variation, $k = \sigma / \lambda$, where $k$ is the coefficient of variation equal to the between-cluster standard deviation in rates ($\sigma$) divided by the average incidence rate ($\lambda$).
+
+To help ensure that the SD estimates are well defined in terms of mortality rates measured over a consistent period, we have limited this analysis to clusters that were enrolled for the entire 2 years of the trial, so have only included the clusters in random allocation 1.
+
+
+# Load configuration file
+```{r preamble, message=FALSE}
+library(here)
+here()
+source(here("R","0-AVENIR-primary-Config.R"))
+```
+
+
+# Load data
+
+Load the AVENIR trial analysis dataset, grappe-phase. 
+
+Aggreagate the data to the grappe (cluster) level.
+
+Limit the analysis to grappes in random allocation 1 and to those with contributed person-time at risk
+
+```{r load data}
+#-------------------------------
+# load the grappe-phase level 
+# dataset
+#-------------------------------
+d1 <- read_rds(here("data","AVENIR_grappe_phase_public.rds")) %>%
+  rename(siteid = siteid_public)
+
+# Recode tx labels to make them easier to read
+d2 <- d1 %>%
+    mutate(
+    tx = case_when(
+        tx == "3 - Placebo 1-59m" ~ "Placebo",
+        tx == "2 - Azithro 1-11m" ~ "Azithro 1-11m",
+        tx == "1 - Azithro 1-59m" ~ "Azithro 1-59m"
+    ),
+    tx = factor(tx, levels = c("Placebo","Azithro 1-11m","Azithro 1-59m"))
+           )
+
+#-------------------------------
+# aggregate data over phases
+# to the cluster level
+#
+# then
+# calculate the cluster-level
+# incidence rate for 1-59 and 1-11m
+#-------------------------------
+d3 <- d2 %>%
+    group_by(siteid, tx, adaptive_rand) %>%
+    summarize(ndeaths1to59 = sum(n_deaths_1to59),
+              py1to59 = sum(pt_year_1to59),
+              ndeaths1to11 = sum(n_deaths_1to11),
+              py1to11 = sum(pt_year_1to11), 
+              .groups = "drop") %>%
+    mutate(mrate1to59 = ndeaths1to59/py1to59,
+           mrate1to11 = ndeaths1to11/py1to11)
+
+#-------------------------------
+# pivot longer by age range
+#
+# limit to clusters in each age
+# range that have actual person
+# time at risk
+#
+# limit to clusters that 
+# were part of the first allocation
+# and so have rates that represent
+# 2 years of follow-up
+#
+# the rate estimates will be more
+# variable with less person-time
+# measured in the cluster.
+#-------------------------------
+d4 <- d3 %>%
+    select(siteid,tx,adaptive_rand, ndeaths=ndeaths1to59, py = py1to59, mrate = mrate1to59) %>%
+    mutate(age_range = "Ages 1 to 59m") %>%
+    bind_rows(d3 %>% select(siteid,tx,adaptive_rand, ndeaths=ndeaths1to11, py = py1to11, mrate = mrate1to11)) %>%
+    mutate(age_range = if_else(is.na(age_range), "Ages 1 to 11m", age_range)) %>%
+    filter(py>0) %>%
+    filter(adaptive_rand == "Random Allocation 1")
+```
+
+
+
+# Estimate mortality rate SDs by age range and arm
+
+
+Estimation of the coefficient of variance in mortality rates, from Hayes and Moulton eq 7.17: 
+
+$$
+\widehat{\sigma}_B^2 = s^2 - \frac{r}{\overline{y}_H}
+$$
+
+Where $s^2$ is the between-cluster variance of the mortality rates, $r$ is the overall rate computed from all clusters combined, and ${\overline{y}_H}$ is the harmonic mean of the $y_i$ (person-years of follow-up in study clusters).
+
+Hence, coefficient of variance is $$\widehat{k} = \frac{\widehat{\sigma}_B}{r}$$
+
+Note that in the arm-specific estimates below, this coefficient of variation could not be estimated in many cases because the variance estimator is zero or negative. Thus, we also estimate the simple coefficient of variance, which is just the standard deviation in rates divided by the overall rate, $k = s/r$.
+
+```{r estimate mrate sd by arm}
+#-------------------------------
+# estimate SD by treatment
+# group and age range
+#-------------------------------
+
+sd_by_tx <- d4 %>%
+    group_by(age_range, tx) %>%
+    mutate(ncl = n(),
+           totdeaths = sum(ndeaths),
+           totpy = sum(py),
+           mrate_sd = sd(mrate, na.rm=TRUE),
+           y_H = 1/mean(1/py)
+           )  %>%
+    slice(1) %>%
+    select(age_range,tx,ncl,totdeaths,totpy,mrate_sd, y_H) %>%
+    mutate(mrate=totdeaths/totpy,
+           sigma2_b = mrate_sd^2 - (mrate/y_H),
+           k = sqrt(sigma2_b) / mrate, 
+           k_simple = mrate_sd / mrate)
+
+kbl(sd_by_tx, digits = c(0,0,0,0,1,4,4,4,4,4,4), format.args = list(big.mark=",")) %>%
+    kableExtra::kable_styling(bootstrap_options = "striped")
+
+
+```
+
+# Estimate mortality rate SDs by age range overall
+
+The values of SD are reasonably similar for the different arms (above), so estimate an overall summary for the two age ranges.
+
+```{r estimate mrate sd overall }
+sd_overall <- d4 %>%
+    group_by(age_range) %>%
+    mutate(ncl = n(),
+           totdeaths = sum(ndeaths),
+           totpy = sum(py),
+           mrate_sd = sd(mrate, na.rm=TRUE),
+           y_H = 1/mean(1/py)
+           )  %>%
+    slice(1) %>%
+    select(age_range,ncl,totdeaths,totpy,mrate_sd, y_H) %>%
+    mutate(mrate=totdeaths/totpy,
+           sigma2_b = mrate_sd^2 - (mrate/y_H),
+           k = sqrt(sigma2_b) / mrate, 
+           k_simple = mrate_sd / mrate)
+
+kbl(sd_overall,  digits = c(0,0,0,1,4,4,4,4,4,4), format.args = list(big.mark=",")) %>%
+    kableExtra::kable_styling(bootstrap_options = "striped")
+    
+```
+
+# Estimate post-hoc power for the age 1-11m comparison
+
+During peer review, there was a question about whether the age 1-11m comparison was under powered because the mortality rate was lower than expected.
+
+Below, we estimate power given the observed mortality rate in the placebo group, mean person-years per cluster, and the allocation ratio of azithromycin/placebo clusters, and the between-cluster coefficient of variation estimated above using the Hayes and Moulton estimator of $k$. 
+
+We use a sample size equation for a cluster RCT with treatment arms of unequal size, Hayes and Moulton (2017) eq 7.20:
+
+$$
+c_0 = 1 + (Z_{1-\alpha/2} + Z_{1-\beta})^2 \frac{(\lambda_{0}/y + k_{0}^2 \lambda_{0}^2) + (\lambda_1/y + k_{1}^2\lambda_{1}^2)/n}{(\lambda_0 - \lambda_1)^2}
+$$
+For $y$ person-years of follow-up in each cluster. $c$ is the required number of clusters per arm, $Z_{\alpha/2}$ and $Z_{1-\beta}$ are standard normal distribution values corresponding to upper tail probabilities of $\alpha/2$ and $\beta$ , respectively. This sample size gives 100(1 − $\beta$ )% power of obtaining a significant difference ($p < \alpha$ on a two-sided test) assuming that the true event rates in the presence and absence of the intervention are $\lambda_1$ and $\lambda_0$ , respectively.  The equation can alternatively be solved for power.
+
+```{r estimate post-hoc power}
+# Hayes and Moulton 7.20 
+# sample size equation for number of clusters, allowing for unequal allocation (n)
+sampsi_cl <- function(lambda0, effect_size, fu_time, k, alpha, power, n) {
+    # lambda0 : rate in placebo
+    # effect_size : Incidence Rate Ratio E(lambda1/lambda0)
+    # fu_time : mean person-years per cluster
+    # k : coefficient of variation
+    # alpha : 2-side alpha level
+    # power : 1-beta
+    # n : allocation ratio for treated / placebo
+  zab <- (qnorm(1-alpha/2)+qnorm(power))^2
+  lambda1 <- lambda0 * effect_size
+  num_term_1 <- lambda0/fu_time + k^2*lambda0^2
+  num_term_2 <- (lambda1/fu_time + k^2*lambda1^2)/n # n: allocation ratio
+  num <- num_term_1 + num_term_2
+  denom <- (lambda0-lambda1)^2
+  1+zab*(num/denom)
+}
+
+power_cl <- function(lambda0, effect_size, fu_time, k, c0, n) {
+    # lambda0 : rate in placebo
+    # effect_size : Incidence Rate Ratio E(lambda1/lambda0)
+    # fu_time : mean person-years per cluster
+    # k : coefficient of variation
+    # c0 : number of clusters in placebo arm
+    # n : allocation ratio for treated / placebo
+    uniroot(function(x) sampsi_cl(
+      lambda0, effect_size, fu_time, k, alpha=0.05, x, n)-c0, 
+      c(0.001,0.999))$root
+}
+```
+
+```{r power assumptions}
+# hard code parameter values, based on the empirical data
+# observed mortality rate in placebo
+lambda0 <- 524/21958
+# designed effect size: a 19% reduction in mortality
+lambda1 <- lambda0*0.81
+irr <- 0.81
+# follow-up time (average per cluster)
+ncl_p <- 475 + 355 + 99
+ncl_a <- 438 + 231 + 82
+py_p <- 14555.7 + 6724.8 + 677.3
+py_a <- 14142 + 4621.2 + 665.4
+py_avg <- (py_p + py_a) / (ncl_p + ncl_a)
+# coefficient of variation (from above)
+k1to11 <- sd_overall$k[1]
+# allocation ratio (0.81)
+alloc_ratio <- ncl_a / ncl_p
+```
+
+
+Below, we use the empirical rates, number of clusters and average follow-up time per cluster, and between cluster coefficient of variation in mortality for rates among children 1-11m old in the 1-11m treatment group and the placebo group. 
+
+Assumptions:
+
+  * Mortality rate per year in the placebo group ($\lambda_0$, observed): `r lambda0`
+  
+  * Average person years per cluster ($y$, observed): `r py_avg`
+  
+  * Coefficient of variation in mortality ($k_0 = k_1 = k$, observed): `r k1to11`
+  
+  * Number of grappes in the placebo arm after response-adaptive allocation ($c_0$, observed): `r ncl_p`
+  
+  * Allocation ratio of azithromycin 1-11m to placebo ($n$, observed: `r ncl_a`/`r ncl_p`): `r sprintf("%1.2f",alloc_ratio)`
+  
+  * Effect size: 19% relative reduction (IRR = 0.81), the assumed effect size at the design stage of the trial
+ 
+
+```{r solve for power}
+# solve for power
+post_hoc_power <- power_cl(lambda0=lambda0, effect_size = 0.81, fu_time = py_avg, k= k1to11, n=alloc_ratio, c0=ncl_p)
+
+# estimate sample size across a range of power
+poweri <- seq(0.1,0.9,by=0.001)
+ssi <- rep(NA, length(poweri))
+for(i in 1:length(poweri)) {
+     ssi[i] <- sampsi_cl(lambda0=lambda0,effect_size = 0.81, fu_time = py_avg, k = k1to11, alpha = 0.05, power = poweri[i], n = alloc_ratio)
+}
+
+```
+
+Under these assumptions, the post-hoc estimate of power to detect a 19% relative reduction in mortality for the 1-11m comparison was: `r paste0(sprintf("%1.0f",post_hoc_power*100),"%")`
+
+Below is the power curve for varying sample sizes under the observed mortality rate, measures of variability, and allocation ratio of the adaptive trial. The number of clusters in the AVENIR placebo arm ($c=929$) and corresponding power to detect a 19% reduction in mortality is indicated with a dashed line. 
+
+Thus, the post-hoc estimate of power is quite close to the designed power of the 1-11m comparison (80% power).  Although the mortality rate among 1-11m old children was lower than assumed (24 per 1000 observed vs assumed 45 per 1000), the cluster-level standard deviation of mortality is approximately half in rate per year (0.0365 observed vs 0.074 assumed) so on balance power was essentially the same.
+
+```{r plot power curve, fig.width = 6}
+d_power <- data.frame(ss = ssi, pow = poweri)
+
+ggplot(data = d_power, aes(x = ss, y = pow)) +
+    geom_line() +
+    geom_vline(xintercept = 929, lty = "dashed") +
+    geom_hline(yintercept = post_hoc_power, lty = "dashed") +
+    scale_y_continuous(breaks=seq(0.1,0.9,by=0.1)) +
+    scale_x_continuous(breaks=c(seq(0,800,by=200),929,1000)) +
+    coord_cartesian(ylim=c(0.1,0.9),xlim=c(0,1000)) +
+    labs(x = "Placebo group sample size (grappes)", y = "Power to detect a 19% reduction (IRR = 0.81)") +
+    theme_minimal() +
+    theme(
+        panel.grid.minor = element_blank()
+    )
+
+
+
+
+```
+
+# Session Info
+```{r session info}
+sessionInfo()
+```
+
+

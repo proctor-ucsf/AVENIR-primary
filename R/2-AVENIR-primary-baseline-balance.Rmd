@@ -1,0 +1,260 @@
+---
+title: "AVENIR Mortality Baseline Balance"
+author: "Brittany Peterson"
+date: "`r Sys.time()`"
+output: 
+  html_document:
+    highlight: haddock
+    theme: default
+    code_folding: hide
+    df_print: paged
+    toc: yes
+    toc_depth: '3'
+    toc_float:
+      collapsed: yes
+      smooth_scroll: yes
+---
+
+```{r setup, message = F, warning=F}
+rm(list=ls())
+
+library(here)
+
+# source configuration file
+source(here("R", "0-AVENIR-primary-Config.R"))
+
+# load in AVENIR data for treatment coverage
+# rename public IDs to align with original code that runs on internal data
+avenir_data <- read_rds(here("data", "AVENIR_child_census_visit_public.rds")) %>%
+  rename(siteid = siteid_public, hhid = hhid_public, childid = childid_public)
+pt_by_grappe <- read_rds(here("data", "AVENIR_grappe_phase_public.rds")) %>%
+  rename(siteid = siteid_public)
+
+contributes <- pt_by_grappe %>%
+    group_by(siteid) %>%
+    summarise(n = sum(pt_year_1to59, na.rm = T)) %>%
+    filter(n > 0)
+
+
+```     
+
+
+# Baseline Characteristics of Eligible Children
+```{r baseline char}
+
+child_per_community <- avenir_data %>%
+    filter(siteid %in% contributes$siteid) %>%
+    filter(eligible_yn == "Yes") %>%
+    filter(phase == "0") %>%
+    group_by(siteid,tx) %>%
+    summarise(n_child = sum(ageinmonths %in% 1:59)) %>%
+    group_by(tx) %>%
+    summarise(mean_child = mean(n_child),
+              sd_child = sd(n_child)) %>%
+    mutate(`Children per Community Mean (SD)` = paste0(round(mean_child,2), " (", round(sd_child,2), ")")) %>%
+    select(tx, `Children per Community Mean (SD)`) %>%
+    pivot_longer(2, names_to = "Characteristic", values_to = "Values") %>%
+    spread(tx, Values)
+
+baseline_char <- avenir_data %>%
+    filter(siteid %in% contributes$siteid) %>%
+    filter(eligible_yn == "Yes") %>%
+    filter(phase == "0") %>%
+    group_by(tx) %>%
+    summarise(`Communities (N)` = n_distinct(siteid),
+              `Children (N)` = n_distinct(childid),
+              female_sex = sum(child_sex == "Female", na.rm = T),
+              female_sex_prop = female_sex/`Children (N)`,
+              age_1_11 = sum(ageinmonths %in% 1:11),
+              prop_age_1_11 = age_1_11/`Children (N)`,
+              age_12_23 = sum(ageinmonths %in% 12:23),
+              prop_age_12_23 = age_12_23/`Children (N)`,
+              age_24_59 = sum(ageinmonths %in% 24:59),
+              prop_age_24_59 = age_24_59/`Children (N)`) %>%
+    mutate(`1-11 months` = paste0(age_1_11, ", ", round(prop_age_1_11*100,2), "%"),
+           `12-23 months` = paste0(age_12_23, ", ", round(prop_age_12_23*100,2), "%"),
+           `24-59 months` = paste0(age_24_59, ", ", round(prop_age_24_59*100,2), "%"),
+           `Percent female` = paste0(female_sex, ", ", round(female_sex_prop*100,2), "%")) %>%
+    select(tx, `Communities (N)`, `Children (N)`, `Percent female`, `1-11 months`, `12-23 months`, `24-59 months`) %>%
+    mutate(`Communities (N)` = as.character(`Communities (N)`),
+           `Children (N)` = as.character(`Children (N)`)) %>%
+    pivot_longer(2:7, names_to = "Characteristic", values_to = "Values") %>%
+    spread(tx, Values) %>%
+    bind_rows(.,child_per_community)
+
+baseline_char$Characteristic <- factor(baseline_char$Characteristic, levels = c("Communities (N)", "Children (N)", "Children per Community Mean (SD)",
+                                                                                "Percent female", "1-11 months", "12-23 months", 
+                                                                                "24-59 months"))
+
+baseline_char <- baseline_char %>%
+    arrange(Characteristic)
+
+
+kable(baseline_char, format.args = list(big.mark = ",")) %>%
+  row_spec(0, bold=TRUE) %>%
+  column_spec(1, bold=TRUE) %>%
+  group_rows("Age group (N, %)", 5, 7) %>%
+    kable_styling()
+
+
+```     
+
+
+```{r mean household CB delete}
+
+child_per_community <- avenir_data %>%
+    filter(siteid %in% contributes$siteid) %>%
+    filter(eligible_yn == "Yes") %>%
+    filter(phase == "0") %>%
+    group_by(siteid) %>%
+    summarise(n_child = sum(ageinmonths %in% 1:59),
+              n_household = n_distinct(hhid)) %>%
+    summarise(mean_child = mean(n_child),
+              sd_child = sd(n_child),
+              mean_household = mean(n_household),
+              sd_household = sd(n_household)) %>%
+    mutate(`Children per Community Mean (SD)` = paste0(round(mean_child, 2), " (", round(sd_child, 2), ")"),
+           `Households per Community Mean (SD)` = paste0(round(mean_household, 2), " (", round(sd_household, 2), ")")) %>%
+    select(`Children per Community Mean (SD)`, `Households per Community Mean (SD)`) %>%
+    pivot_longer(c(1, 2), names_to = "Characteristic", values_to = "Values") %>%
+    spread(Characteristic, Values)
+
+
+
+```     
+
+
+```{r baseline char for rando groups 2 and 3}
+
+child_per_community.2 <- avenir_data %>%
+    filter(siteid %in% contributes$siteid) %>%
+    filter(eligible_yn == "Yes") %>%
+    filter(phase == "12",
+           adaptive_rand == "Random Allocation 2") %>%
+    group_by(siteid,tx) %>%
+    summarise(n_child = sum(ageinmonths %in% 1:59)) %>%
+    group_by(tx) %>%
+    summarise(mean_child = mean(n_child),
+              sd_child = sd(n_child)) %>%
+    mutate(`Children per Community Mean (SD)` = paste0(round(mean_child,2), " (", round(sd_child,2), ")")) %>%
+    select(tx, `Children per Community Mean (SD)`) %>%
+    pivot_longer(2, names_to = "Characteristic", values_to = "Values") %>%
+    spread(tx, Values)
+
+baseline_char.2 <- avenir_data %>%
+    filter(siteid %in% contributes$siteid) %>%
+    filter(eligible_yn == "Yes") %>%
+    filter(phase == "12",
+           adaptive_rand == "Random Allocation 2") %>%
+    group_by(tx) %>%
+    summarise(`Communities (N)` = n_distinct(siteid),
+              `Children (N)` = n_distinct(childid),
+              female_sex = sum(child_sex == "Female", na.rm = T),
+              female_sex_prop = female_sex/`Children (N)`,
+              age_1_11 = sum(ageinmonths %in% 1:11),
+              prop_age_1_11 = age_1_11/`Children (N)`,
+              age_12_23 = sum(ageinmonths %in% 12:23),
+              prop_age_12_23 = age_12_23/`Children (N)`,
+              age_24_59 = sum(ageinmonths %in% 24:59),
+              prop_age_24_59 = age_24_59/`Children (N)`) %>%
+    mutate(`1-11 months` = paste0(age_1_11, ", ", round(prop_age_1_11*100,2), "%"),
+           `12-23 months` = paste0(age_12_23, ", ", round(prop_age_12_23*100,2), "%"),
+           `24-59 months` = paste0(age_24_59, ", ", round(prop_age_24_59*100,2), "%"),
+           `Percent female` = paste0(female_sex, ", ", round(female_sex_prop*100,2), "%")) %>%
+    select(tx, `Communities (N)`, `Children (N)`, `Percent female`, `1-11 months`, `12-23 months`, `24-59 months`) %>%
+    mutate(`Communities (N)` = as.character(`Communities (N)`),
+           `Children (N)` = as.character(`Children (N)`)) %>%
+    pivot_longer(2:7, names_to = "Characteristic", values_to = "Values") %>%
+    spread(tx, Values) %>%
+    bind_rows(.,child_per_community.2)
+
+baseline_char.2$Characteristic <- factor(baseline_char.2$Characteristic, levels = c("Communities (N)", "Children (N)", "Children per Community Mean (SD)",
+                                                                                "Percent female", "1-11 months", "12-23 months", 
+                                                                                "24-59 months"))
+
+baseline_char.2 <- baseline_char.2 %>%
+    arrange(Characteristic)
+
+
+### third rando group
+child_per_community.3 <- avenir_data %>%
+    filter(siteid %in% contributes$siteid) %>%
+    filter(eligible_yn == "Yes") %>%
+    filter(phase == "18",
+           adaptive_rand == "Random Allocation 3") %>%
+    group_by(siteid,tx) %>%
+    summarise(n_child = sum(ageinmonths %in% 1:59)) %>%
+    group_by(tx) %>%
+    summarise(mean_child = mean(n_child),
+              sd_child = sd(n_child)) %>%
+    mutate(`Children per Community Mean (SD)` = paste0(round(mean_child,2), " (", round(sd_child,2), ")")) %>%
+    select(tx, `Children per Community Mean (SD)`) %>%
+    pivot_longer(2, names_to = "Characteristic", values_to = "Values") %>%
+    spread(tx, Values)
+
+baseline_char.3 <- avenir_data %>%
+    filter(siteid %in% contributes$siteid) %>%
+    filter(eligible_yn == "Yes") %>%
+    filter(phase == "18",
+           adaptive_rand == "Random Allocation 3") %>%
+    group_by(tx) %>%
+    summarise(`Communities (N)` = n_distinct(siteid),
+              `Children (N)` = n_distinct(childid),
+              female_sex = sum(child_sex == "Female", na.rm = T),
+              female_sex_prop = female_sex/`Children (N)`,
+              age_1_11 = sum(ageinmonths %in% 1:11),
+              prop_age_1_11 = age_1_11/`Children (N)`,
+              age_12_23 = sum(ageinmonths %in% 12:23),
+              prop_age_12_23 = age_12_23/`Children (N)`,
+              age_24_59 = sum(ageinmonths %in% 24:59),
+              prop_age_24_59 = age_24_59/`Children (N)`) %>%
+    mutate(`1-11 months` = paste0(age_1_11, ", ", round(prop_age_1_11*100,2), "%"),
+           `12-23 months` = paste0(age_12_23, ", ", round(prop_age_12_23*100,2), "%"),
+           `24-59 months` = paste0(age_24_59, ", ", round(prop_age_24_59*100,2), "%"),
+           `Percent female` = paste0(female_sex, ", ", round(female_sex_prop*100,2), "%")) %>%
+    select(tx, `Communities (N)`, `Children (N)`, `Percent female`, `1-11 months`, `12-23 months`, `24-59 months`) %>%
+    mutate(`Communities (N)` = as.character(`Communities (N)`),
+           `Children (N)` = as.character(`Children (N)`)) %>%
+    pivot_longer(2:7, names_to = "Characteristic", values_to = "Values") %>%
+    spread(tx, Values) %>%
+    bind_rows(.,child_per_community.3)
+
+baseline_char.3$Characteristic <- factor(baseline_char.3$Characteristic, levels = c("Communities (N)", "Children (N)", "Children per Community Mean (SD)",
+                                                                                "Percent female", "1-11 months", "12-23 months", 
+                                                                                "24-59 months"))
+
+baseline_char.3 <- baseline_char.3 %>%
+    arrange(Characteristic)
+
+
+
+```      
+
+## Baseline Characteristics of Random Allocation Group 2
+
+```{r baseline of group 2}
+
+kable(baseline_char.2, format.args = list(big.mark = ",")) %>%
+  row_spec(0, bold=TRUE) %>%
+  column_spec(1, bold=TRUE) %>%
+  group_rows("Age group (N, %)", 5, 7) %>%
+    kable_styling()
+
+```     
+
+## Baseline Characteristics of Random Allocation Group 3
+
+```{r baseline of group 3}
+
+kable(baseline_char.3, format.args = list(big.mark = ",")) %>%
+  row_spec(0, bold=TRUE) %>%
+  column_spec(1, bold=TRUE) %>%
+  group_rows("Age group (N, %)", 5, 7) %>%
+    kable_styling()
+
+```     
+
+# Session Info
+```{r session info}
+sessionInfo()
+```

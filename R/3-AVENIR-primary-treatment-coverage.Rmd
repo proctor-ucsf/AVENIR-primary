@@ -1,0 +1,113 @@
+---
+title: "AVENIR Mortality Treatment Coverage"
+author: "Brittany Peterson"
+date: "`r Sys.time()`"
+output: 
+  html_document:
+    highlight: haddock
+    theme: default
+    code_folding: hide
+    df_print: paged
+    toc: yes
+    toc_depth: '3'
+    toc_float:
+      collapsed: yes
+      smooth_scroll: yes
+---
+
+```{r setup, message = F, warning=F}
+rm(list=ls())
+
+library(here)
+
+# source configuration file
+source(here("R", "0-AVENIR-primary-Config.R"))
+
+# load in PT by Grappe data
+# rename public IDs to align with internal data
+pt_by_grappe <- read_rds(here("data", "AVENIR_grappe_phase_public.rds")) %>%
+  rename(siteid = siteid_public)
+
+# load in AVENIR data for treatment coverage
+avenir_data <- read_rds(here("data", "AVENIR_child_census_visit_public.rds")) %>%
+  rename(siteid = siteid_public, hhid = hhid_public, childid = childid_public)
+
+
+```     
+
+```{r children LTFU}
+
+children_ltfu <- pt_by_grappe %>%
+    group_by(adaptive_rand,phase) %>%
+    summarise(children_ltfu = sum(lost_1to59, na.rm = T))
+
+coverage_overall <- avenir_data %>%
+    group_by(siteid) %>%
+    summarise(cov = sum(is_administered == "Yes" & eligible_yn == "Yes", na.rm = T)/sum(eligible_yn == "Yes", na.rm = T)) %>%
+    ungroup() %>%
+    summarise(mean = mean(cov, na.rm = T),
+              sd = sd(cov, na.rm = T),
+              min = min(cov, na.rm = T),
+              max = max(cov, na.rm = T)) %>%
+    mutate(value = paste0(percent(mean, accuracy = 0.1), ", ", percent(sd, accuracy = 0.1), " [", 
+                          percent(min, accuracy = 0.1), ", ", percent(max, accuracy = 0.1), "]")) %>%
+    pull(value)
+
+
+```     
+
+# Treatment Coverage by Round   
+
+## Overall study treatment coverage is:   
+#### `r coverage_overall`
+
+*Mean, SD [Min, Max]*
+```{r treatment cov, message = F, warning=F}
+
+trt_cov <- avenir_data %>%
+    group_by(phase,tx,siteid) %>%
+    summarise(cov = sum(is_administered == "Yes" & eligible_yn == "Yes", na.rm = T)/sum(eligible_yn == "Yes", na.rm = T)) %>%
+    group_by(phase,tx) %>%
+    summarise(mean = mean(cov, na.rm = T),
+              sd = sd(cov, na.rm = T),
+              min = min(cov, na.rm = T),
+              max = max(cov, na.rm = T)) %>%
+    rename(Phase = phase) %>%
+    mutate(value = paste0(percent(mean, accuracy = 0.1), ", ", percent(sd, accuracy = 0.1), " [", 
+                          percent(min, accuracy = 0.1), ", ", percent(max, accuracy = 0.1), "]")) %>%
+    select(Phase,tx,value) %>%
+    spread(tx,value)
+
+trt_cov_overall <- avenir_data %>%
+    group_by(tx,siteid) %>%
+    summarise(cov = sum(is_administered == "Yes" & eligible_yn == "Yes", na.rm = T)/sum(eligible_yn == "Yes", na.rm = T)) %>%
+    group_by(tx) %>%
+    summarise(mean = mean(cov, na.rm = T),
+              sd = sd(cov, na.rm = T),
+              min = min(cov, na.rm = T),
+              max = max(cov, na.rm = T)) %>%
+    mutate(Phase = "Overall") %>%
+    mutate(value = paste0(percent(mean, accuracy = 0.1), ", ", percent(sd, accuracy = 0.1), " [", 
+                          percent(min, accuracy = 0.1), ", ", percent(max, accuracy = 0.1), "]")) %>%
+    select(Phase,tx,value) %>%
+    spread(tx,value)
+
+trt_cov <- bind_rows(trt_cov, trt_cov_overall)
+
+trt_cov$Phase <- factor(trt_cov$Phase, levels = c("0", "6", "12", "18", "24", "Overall"))
+
+trt_cov <- trt_cov %>%
+    arrange(Phase)
+
+
+kable(trt_cov, "html",
+        booktabs=T) %>%
+  row_spec(0,bold=TRUE) %>%
+    kable_styling()
+
+```    
+
+# Session Info
+```{r session info}
+sessionInfo()
+```
