@@ -68,7 +68,7 @@ rmarkdown::render(here::here("R/5-AVENIR-primary-enrollment-map.Rmd"),
                   output_file = here::here("output/5-AVENIR-primary-enrollment-map.html"))
 
 #-----------------------------
-# Figure 2
+# Figure 2, Figure 3
 # Table S3, Table S4, Table S5
 # Primary and Secondary analyses
 #-----------------------------
