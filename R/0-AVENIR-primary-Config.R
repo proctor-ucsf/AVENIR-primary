@@ -15,7 +15,9 @@
 # load worker packages
 #----------------------------
 library(here)
+library(renv)
 library(tidyverse)
+library(rmarkdown)
 library(kableExtra)
 library(readxl)
 library(zoo)
