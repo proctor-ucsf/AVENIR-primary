@@ -17,17 +17,7 @@ output:
 
 # Overview
 
-NOTE FOR PUBLIC REPLICATION
-THIS SCRIPT WILL NOT RUN ON PUBLIC DATA
-
-IT RELIES ON IDIOSYNCRATIC DATASETS TO IDENTIFY 91 GRAPPES THAT WERE RANDOMIZED BUT
-NOT ACTUALLY MEASURED.  AFTER INTERNAL REVIEW, WE DECIDED TO
-LEAVE AS-IS BECAUSE IT WOULD REQUIRE QUITE A BIT OF WORK TO WEAVE INTO THE PUBLIC
-WORKFLOW AN APPROPRIATE DATASET TO IDENTIFY THESE GRAPPES
-SEE THE NOTE IN FIGURE S1 CONSORT FLOW DIAGRAM TO EXPLAIN THIS
-THIS IS WHY THERE ARE 2,909 GRAPPES WITH PERSON-TIME IN THE CHILD-PHASE LEVEL DATA
-
-We have provided the original code and output for documentation
+This file summarizes the number of clusters, children, and person time by treatment group. The numbers are reported in Figure S1 of the article. 
 
 ```{r setup, message = F, warning=F}
 rm(list=ls())
@@ -47,133 +37,28 @@ pt_by_grappe <- read_rds(here("data", "AVENIR_grappe_phase_public.rds")) %>%
 pt_by_child <- read_rds(here("data", "AVENIR_child_phase_public.rds")) %>%
   rename(siteid = siteid_public, hhid = hhid_public, childid = childid_public)
 
+# this dataframe gives the reasons that some villages were not censused,
+# number of villages not censused were calculated by comparing our data 
+# with randomization documents and noting which villages do not appear in the data,
+# reasons were given to us by the field team
+# numbers are hard-coded as the document this comes from is not public
+reason_not_censused <- structure(list(reason = c("Does not exist", "Other", "Red zone", 
+"Refusal", "Protocol deviation"), n = c(39L, 2L, 40L, 7L, 3L)), row.names = c(NA, 
+-5L), class = c("tbl_df", "tbl", "data.frame"))
+
 ```     
-
-```{r total randomized}
-
-#-------------------------------------------
-# load in randomization file
-rando.groups <- read_csv(paste0(randomization_data, "/UNMASKED_AVENIR_grappe_enrollment_date_arm.csv"))
-
-#-------------------------------------------
-# load in unmasked treatment arms and merge to randomized files
-tx_letter <- read_csv(paste0(randomization_data, "/avenir-treatment-assignments.csv")) %>%
-    rename(tx = arm,
-           treatment_letter = letter)
-
-dosso_tx <- read_excel(paste0(randomization_data, "/AVENIR_Dosso_TxLetters_2023_03_08.xlsx"))
-tahoua1_tx <- read_excel(paste0(randomization_data, "/AVENIR_Tahoua_TxLetters_0224_locked.xlsx"))
-tahoua2_tx <- read_excel(paste0(randomization_data, "/AVENIR-Randomization-Tahoua-Part2-Mortality-2022-10-20_locked.xlsx"))
-
-#-------------------------------------------
-# clean randomization data
-dosso_tx <- dosso_tx %>%
-  rename(siteid = site_code) %>%
-  filter(!is.na(treatment_letter_1_11)) %>%
-  mutate(region = case_when(mortality_round4 == 1 ~ "Dosso Part2",
-                            mortality == 1 ~ "Dosso Part1",
-                            TRUE ~ "")) %>%
-  select(region, siteid, treatment_letter_1_11)
-
-
-tahoua1_tx <- tahoua1_tx %>%
-  rename(siteid = site_code) %>%
-  filter(mortality==1) %>%
-  mutate(region = "Tahoua Part1") %>%
-  select(region, siteid, treatment_letter_1_11)
-
-tahoua2_tx <- tahoua2_tx %>%
-  rename(siteid = site_code) %>%
-  mutate(region = "Tahoua Part2") %>%
-  select(region, siteid, treatment_letter_1_11)
-tx <- bind_rows(dosso_tx, tahoua1_tx, tahoua2_tx)
-
-#-------------------------------------------
-#### get list of all grappes with random allocation and tx
-tx_allocation_all <- tx %>%
-    left_join(tx_letter, by = c("treatment_letter_1_11" = "treatment_letter")) %>%
-    filter(region != "") %>%
-    mutate(adaptive_rand = case_when(region == "Dosso Part1" ~ "Random Allocation 1",
-                                     region == "Tahoua Part1" ~ "Random Allocation 2",
-                                     region %in% c("Dosso Part2", "Tahoua Part2") ~ "Random Allocation 3")) %>%
-    mutate(adaptive_rand = ifelse(siteid == "1-04-43-085", "Random Allocation 1", adaptive_rand))
-
-total <- tx_allocation_all %>%
-    group_by(adaptive_rand,tx) %>%
-    summarise(rand = n())
-
-#-------------------------------------------
-# total siteids
-total.site <- pt_by_child %>% distinct(siteid) %>% nrow()
-total.child<- pt_by_child %>% distinct(childid) %>% nrow()
-total.years <- sum(pt_by_grappe$pt_year_1to59)
-total.deaths <- sum(pt_by_grappe$n_deaths_1to59)
-
-#-------------------------------------------
-# get # excluded
-dosso_tx2 <- read_excel(paste0(randomization_data, "/AVENIR_Dosso_TxLetters_2023_03_08.xlsx")) %>%
-    filter(mortality == 1 |mortality_round4 == 1)
-tahouatx2 <- read_excel(paste0(randomization_data, "/AVENIR_Tahoua_TxLetters_02_01.xlsx")) %>%
-    mutate(Menage = as.numeric(Menage),
-           lat = as.numeric(lat),
-           long = as.numeric(long),
-           kmToTown = as.numeric(kmToTown)) %>%
-    filter(mortality ==1 )
-tx2 <- bind_rows(dosso_tx2, tahouatx2) %>%
-  rename(siteid = site_code)
-
-d.uncensused <- read_excel(paste0(final_data, "/final/AVENIR Refusals, Inexistent, and Low Coverage.xlsx"), sheet = 3) %>%
-  rename(siteid = site_code)
-
-not_in_pt <- tx2 %>%
-    filter(!siteid %in% pt_by_child$siteid)
-
-no.exist <- not_in_pt %>%
-    filter(nonexistent == 1)
-
-not_in_pt <- not_in_pt %>%
-    left_join(d.uncensused, by = "siteid") %>%
-    filter(is.na(nonexistent))
-
-refus <- not_in_pt %>%
-    filter(!siteid %in% no.exist$siteid) %>%
-    filter(str_detect(Observation, "refus")) %>%
-    distinct(siteid)
-
-red_zone <- not_in_pt %>%
-    filter(!siteid %in% no.exist$siteid) %>%
-    filter(!siteid %in% refus$siteid) %>%
-    filter(str_detect(Observation, "rouge")) %>%
-    distinct(siteid)
-
-other <- not_in_pt %>%
-    filter(!str_detect(Observation, "rouge")) %>%
-    filter(!str_detect(Observation, "refus"))
-
-reasons <- tx2 %>%
-    filter(!siteid %in% pt_by_child$siteid) %>%
-    mutate(reason = case_when(siteid %in% no.exist$siteid ~ "Does not Exist",
-                              siteid %in% refus$siteid ~ "Refus",
-                              siteid %in% red_zone$siteid ~ "Red zone",
-                              siteid %in% other$siteid ~ "other")) %>%
-    group_by(reason) %>%
-    summarise(n = n())
-# BP note: 2-12-03-009 only had one household entered and did not contribute person time
-# other 2 NA are protocol deviations
-
-```    
 
 # Last Census Date: July 31, 2023
 
 # Grappe Randomization by Arm
 ```{r grappe rando by arm}
 
-# table with 3 columns for arm, and one row for randomized, one row for analyzed
-randomized <- tx_allocation_all %>%
-    group_by(tx) %>%
-    summarise(grappe = n()) %>%
-    mutate(type = "Randomized") %>%
-    spread(tx,grappe)
+# this dataframe gives the randomization numbers for each arm,
+# number of villages in each arm were calculated via randomization documents
+# numbers are hard-coded as the document this comes from is not public
+randomized.tx <- structure(list(type = "Randomized", `1 - Azithro 1-59m` = 1273L, 
+                                `2 - Azithro 1-11m` = 773L, `3 - Placebo 1-59m` = 954L), class = c("tbl_df", 
+                                                                                                   "tbl", "data.frame"), row.names = c(NA, -1L))
 
 analyzed <- pt_by_grappe %>%
     filter(pt_year_1to59 > 0) %>%
@@ -182,7 +67,7 @@ analyzed <- pt_by_grappe %>%
     mutate(type = "Analyzed") %>%
     spread(tx,grappe)
 
-grappe.totals <- bind_rows(randomized, analyzed)
+grappe.totals <- bind_rows(randomized.tx, analyzed)
 
 kable(grappe.totals %>% rename(" " = type), "html",
         booktabs=T, format.args = list(big.mark = ",")) %>%
@@ -193,13 +78,12 @@ kable(grappe.totals %>% rename(" " = type), "html",
 
 # Grappes Randomized and Analyzed
 ```{r grappe rando by arm 2}
-
-# table with 3 columns for arm, and one row for randomized, one row for analyzed
-randomized <- tx_allocation_all %>%
-    group_by(adaptive_rand) %>%
-    summarise(grappe = n()) %>%
-    mutate(type = "Randomized") %>%
-    spread(adaptive_rand,grappe)
+# this dataframe gives the randomization numbers for each random allocation group,
+# number of villages in each random allocation were calculated via randomization documents
+# numbers are hard-coded as the document this comes from is not public
+randomized.adaptive_rand <- structure(list(type = "Randomized", `Random Allocation 1` = 1407L, 
+                                           `Random Allocation 2` = 1142L, `Random Allocation 3` = 451L), class = c("tbl_df", 
+                                                                                                                   "tbl", "data.frame"), row.names = c(NA, -1L))
 
 analyzed <- pt_by_grappe %>%
     filter(pt_year_1to59 > 0) %>%
@@ -208,7 +92,7 @@ analyzed <- pt_by_grappe %>%
     mutate(type = "Analyzed") %>%
     spread(adaptive_rand,grappe)
 
-grappe.totals <- bind_rows(randomized, analyzed)
+grappe.totals <- bind_rows(randomized.adaptive_rand, analyzed)
 
 kable(grappe.totals %>% rename(" " = type), "html",
         booktabs=T, format.args = list(big.mark = ",")) %>%
